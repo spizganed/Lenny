@@ -174,6 +174,9 @@ class _Header extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = state;
     final status = s.error ?? statusText(s.link, s.reason, sender: false);
+    final battery = s.link != LinkState.streaming || s.controls.battery == null
+        ? null
+        : '${s.controls.battery}%${s.controls.charging ? ' charging' : ''}';
     return Row(children: [
       Text(Brand.appName, style: LennyTokens.wordmark(46)),
       const SizedBox(width: 16),
@@ -183,16 +186,9 @@ class _Header extends StatelessWidget {
         constraints: const BoxConstraints(maxWidth: 440), // long statuses ellipsize; the rest goes to the chips
         child: StatusChip(
           color: linkColor(s.link, error: s.error != null),
-          text: s.phone != null ? '$status · ${s.phone}' : status,
+          text: [status, ?s.phone, ?battery].join(' · '),
         ),
       ),
-      if (s.link == LinkState.streaming && s.controls.battery != null) ...[
-        const SizedBox(width: 12),
-        StickerBadge(
-          text: 'Battery ${s.controls.battery}%${s.controls.charging ? ' · charging' : ''}',
-          fill: s.controls.battery! <= 20 && !s.controls.charging ? LennyTokens.coral : LennyTokens.surface,
-        ),
-      ],
       const SizedBox(width: 24),
       // Wraps under itself on narrow windows instead of overflowing.
       Expanded(

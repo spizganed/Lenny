@@ -65,10 +65,11 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
         spacing: 22,
         child: SafeArea(
           child: OrientationBuilder(builder: (context, o) {
-            final title = Text(Brand.appName, style: LennyTokens.wordmark(38));
+            final title = Text(Brand.appName, style: LennyTokens.wordmark(32));
             final hero = _StatusHero(state: s);
+            // While connected the hero already shows where to; the fields only matter before connecting.
             final connection = StickerCard(label: 'Connection', children: [
-                  StickerField(
+                  if (!s.active) StickerField(
                     label: 'PC address',
                     controller: _host,
                     enabled: !s.active,
@@ -76,7 +77,7 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
                     keyboardType: TextInputType.url,
                     textInputAction: TextInputAction.next,
                   ),
-                  StickerField(
+                  if (!s.active) StickerField(
                     label: 'Port',
                     controller: _port,
                     enabled: !s.active,
@@ -126,8 +127,8 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
                     if (s.caps.has(LENNY_CAP_EXPOSURE_LOCK))
                       ExposureLockToggle(controls: s.controls, onCommand: ctl.command),
                   ]);
-            const gap = SizedBox(height: 16);
-            Widget column(List<Widget> children) => ListView(padding: const EdgeInsets.all(20), children: children);
+            const gap = SizedBox(height: 12);
+            Widget column(List<Widget> children) => ListView(padding: const EdgeInsets.all(16), children: children);
             // Landscape: status + connection left, camera controls right, instead of one thin centered strip.
             if (o == Orientation.landscape) {
               return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -138,7 +139,7 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
             return Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 480),
-                child: column([title, const SizedBox(height: 20), hero, gap, connection, if (camera != null) ...[gap, camera]]),
+                child: column([title, const SizedBox(height: 12), hero, gap, connection, if (camera != null) ...[gap, camera]]),
               ),
             );
           }),
