@@ -1,0 +1,6 @@
+# CONTROL focus_at(x=0x8000, y=0x4000), req_id=7
+4C 59 01 00  40 00  00 00  18 00 00 00          # header: type=CONTROL, len=24
+01 00 04 00 07 00 00 00                         # req_id=7
+0B 00 0C 00                                     # focus_at list, len=12
+   01 00 02 00 00 80                            #   x=0x8000
+   02 00 02 00 00 40                            #   y=0x4000

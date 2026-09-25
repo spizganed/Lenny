@@ -1,0 +1,6 @@
+# VIDEO_FRAME seq=1, pts=1000000us, orientation=90deg, keyframe; data = 00 00 00 01 65 88
+4C 59 01 00  31 00  00 00  16 00 00 00          # header: type=VIDEO_FRAME, len=22
+01 00 00 00                                     # frame_seq=1
+40 42 0F 00 00 00 00 00                         # pts_us=1000000
+01 01 00 00                                     # orientation=1 (90), flags=KEYFRAME, reserved
+00 00 00 01 65 88                               # Annex-B access unit

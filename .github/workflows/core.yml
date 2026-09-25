@@ -1,0 +1,32 @@
+name: core
+
+on:
+  push:
+    paths: ["core/**", "protocol/**", ".github/workflows/core.yml"]
+  pull_request:
+    paths: ["core/**", "protocol/**", ".github/workflows/core.yml"]
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows-msvc, os: windows-latest, flags: "" }
+          - { name: linux-gcc, os: ubuntu-latest, flags: "" }
+          - { name: linux-asan-ubsan, os: ubuntu-latest, flags: "-fsanitize=address,undefined -fno-omit-frame-pointer" }
+          - { name: linux-tsan, os: ubuntu-latest, flags: "-fsanitize=thread" }
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - name: Configure
+        run: cmake -S core -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="${{ matrix.flags }}"
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: build/lenny_tests
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1

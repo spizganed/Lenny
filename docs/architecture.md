@@ -368,7 +368,7 @@ macOS receiver: **dropped** (decision 2026-09-25). The protocol keeps `platform=
 
 ## 12. Build and CI
 - Core: CMake presets for windows-x64, windows-x86 (only for the tests the DShow filter shares, like the shm format),
-  android-arm64/armv7/x86_64 (NDK), later ios/linux. Tests: GoogleTest or doctest (doctest = single header, preferred).
+  android-arm64/armv7/x86_64 (NDK), later ios/linux. Tests: a ~30-line in-repo harness (`core/tests/check.hpp`); no test framework dependency.
 - Flutter: `flutter build apk` / `flutter build windows`. ffigen runs in CI and a diff check keeps bindings in sync.
 - CI: GitHub Actions — core tests on windows + ubuntu, Android build, Windows build. Fuzzing of `wire` decode via libFuzzer on Linux job.
 

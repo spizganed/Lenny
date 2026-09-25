@@ -107,8 +107,10 @@ Sender sends HELLO first. Receiver replies with HELLO. Same role on both sides �
 
 ### 6.2 GOODBYE (0x0002)
 Tag 1 `reason` u16: 0 NORMAL, 1 VERSION, 2 ROLE, 3 PAIR_DENIED, 4 BUSY (another phone is streaming),
-5 TIMEOUT, 6 PROTOCOL_ERROR, 7 USER. Tag 2 `detail` str (optional). The sender closes after sending.
-The receiver doesn't try to reconnect after reasons 1, 2, 3 or 7.
+5 TIMEOUT, 6 PROTOCOL_ERROR, 7 USER. Tag 2 `detail` str (optional). The side sending it closes afterwards.
+The sender (phone) doesn't try to reconnect after reasons 1, 2, 3 or 7. A receiver that is quitting or
+restarting sends 0 (NORMAL), so the phone keeps retrying and resumes by itself; 7 (USER) means the desktop
+user pressed disconnect.
 
 ### 6.3 PING / PONG (0x0003 / 0x0004) — keepalive + clock sync
 PING: tag 1 `seq` u32, tag 2 `t1` i64 (sender-of-ping monotonic µs).
@@ -131,7 +133,6 @@ Receiver rules:
   shows the reason.
 - No PAIR_REQUEST: the receiver applies its policy. Known device → proceed. Unknown → the user
   sees an accept/deny prompt, and if it's not accepted within 30 s the receiver sends `GOODBYE(PAIR_DENIED)`.
-- Rate limit: 5 failed PAIR_REQUESTs per minute per source IP, after which the connection is closed immediately.
 
 The token isn't a new trust boundary. It's proof of recent physical line-of-sight to the screen, used
 instead of the accept prompt. The session then continues with the normal CAPS negotiation.
@@ -166,7 +167,8 @@ The receiver shows the placeholder + reason for anything other than LIVE, withou
 ### 6.8 VIDEO_CONFIG (0x0030) / VIDEO_FRAME (0x0031)
 VIDEO_CONFIG payload: TLV, 1 codec_id u8, 2 `config` bytes (H.264: Annex-B SPS+PPS).
 Sent after STREAM_START, on every settings change, and **before every keyframe**, so a receiver joining or
-recovering never needs state from earlier.
+recovering never needs state from earlier. (The core caches the last config and resends it before each
+keyframe itself, so platforms only hand it over once.)
 
 VIDEO_FRAME is binary (not TLV), for speed:
 ```
