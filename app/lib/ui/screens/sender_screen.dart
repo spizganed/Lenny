@@ -68,27 +68,24 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
             final title = Text(Brand.appName, style: LennyTokens.wordmark(32));
             final hero = _StatusHero(state: s);
             // While connected the hero already shows where to; the fields only matter before connecting.
-            final connection = StickerCard(label: 'Connection', children: [
-                  if (!s.active) StickerField(
-                    label: 'PC address',
-                    controller: _host,
-                    enabled: !s.active,
-                    hint: '192.168.x.x',
-                    keyboardType: TextInputType.url,
-                    textInputAction: TextInputAction.next,
-                  ),
-                  if (!s.active) StickerField(
-                    label: 'Port',
-                    controller: _port,
-                    enabled: !s.active,
-                    keyboardType: TextInputType.number,
-                    textInputAction: TextInputAction.go,
-                    onSubmitted: (_) => _connect(),
-                  ),
-                  s.active
-                      ? StickerButton(label: 'Disconnect', kind: ButtonKind.destructive, onPressed: ctl.disconnect)
-                      : StickerButton(label: 'Connect', kind: ButtonKind.primary, onPressed: _connect),
-                  if (!s.active) ...[
+            final manual = [
+              StickerField(
+                label: 'PC address',
+                controller: _host,
+                hint: '192.168.x.x',
+                keyboardType: TextInputType.url,
+                textInputAction: TextInputAction.next,
+              ),
+              StickerField(
+                label: 'Port',
+                controller: _port,
+                keyboardType: TextInputType.number,
+                textInputAction: TextInputAction.go,
+                onSubmitted: (_) => _connect(),
+              ),
+              StickerButton(label: 'Connect', kind: ButtonKind.primary, onPressed: _connect),
+            ];
+            final quick = [
                     Row(children: [
                       Expanded(
                         child: StickerButton(
@@ -114,28 +111,44 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
                         )
                       else
                         for (final pc in found) _FoundPc(pc: pc, onTap: () => _connectTo(pc)),
-                  ],
-                ]);
-            final camera = !streaming
-                ? null
-                : StickerCard(label: 'Camera', children: [
-                    if (s.caps.hasLenses) LensPicker(caps: s.caps, controls: s.controls, onCommand: ctl.command),
-                    FocusButtons(caps: s.caps, controls: s.controls, onCommand: ctl.command),
-                    if (s.caps.hasTorch) TorchRow(controls: s.controls, onCommand: ctl.command),
-                    if (s.caps.hasExposure)
-                      ExposureSlider(caps: s.caps, controls: s.controls, onCommand: ctl.command, title: 'Exposure'),
-                    if (s.caps.has(LENNY_CAP_EXPOSURE_LOCK))
-                      ExposureLockToggle(controls: s.controls, onCommand: ctl.command),
-                  ]);
+            ];
+            final connection = StickerCard(
+              label: 'Connection',
+              children: s.active
+                  ? [StickerButton(label: 'Disconnect', kind: ButtonKind.destructive, onPressed: ctl.disconnect)]
+                  : [...manual, ...quick],
+            );
+            final lensFocus = [
+              if (s.caps.hasLenses) LensPicker(caps: s.caps, controls: s.controls, onCommand: ctl.command),
+              FocusButtons(caps: s.caps, controls: s.controls, onCommand: ctl.command),
+              if (s.caps.hasTorch) TorchRow(controls: s.controls, onCommand: ctl.command),
+            ];
+            List<Widget> exposure({String? title}) => [
+              if (s.caps.hasExposure)
+                ExposureSlider(caps: s.caps, controls: s.controls, onCommand: ctl.command, title: title),
+              if (s.caps.has(LENNY_CAP_EXPOSURE_LOCK)) ExposureLockToggle(controls: s.controls, onCommand: ctl.command),
+            ];
             const gap = SizedBox(height: 12);
             Widget column(List<Widget> children) => ListView(padding: const EdgeInsets.all(16), children: children);
-            // Landscape: status + connection left, camera controls right, instead of one thin centered strip.
-            if (o == Orientation.landscape) {
+            // Landscape: status | camera | exposure, so nothing scrolls on a phone held sideways.
+            if (o == Orientation.landscape && !s.active) {
               return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                Expanded(child: column([title, gap, hero, gap, connection])),
-                if (camera != null) Expanded(child: column([camera])),
+                Expanded(child: column([title, gap, hero, gap, StickerCard(label: 'Find your PC', children: quick)])),
+                Expanded(child: column([StickerCard(label: 'Or type it', children: manual)])),
               ]);
             }
+            if (o == Orientation.landscape) {
+              return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                Expanded(flex: 4, child: column([title, gap, hero, gap, connection])),
+                if (streaming) ...[
+                  // The middle column is a bit wider so "Lock focus" isn't cut off.
+                  Expanded(flex: 5, child: column([StickerCard(label: 'Camera', children: lensFocus)])),
+                  if (exposure().isNotEmpty)
+                    Expanded(flex: 4, child: column([StickerCard(label: 'Exposure', children: exposure())])),
+                ],
+              ]);
+            }
+            final camera = streaming ? StickerCard(label: 'Camera', children: [...lensFocus, ...exposure(title: 'Exposure')]) : null;
             return Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 480),
