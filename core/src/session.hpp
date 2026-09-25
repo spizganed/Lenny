@@ -46,6 +46,7 @@ public:
     void trust(const wire::DeviceId& id);
     int32_t approve(bool accept);
     int32_t send_control(lenny_control& c);
+    int32_t select_stream(const lenny_stream_settings& preferred);
 
     // Common
     void set_event_listener(void (*fn)(void*, int32_t, int32_t, int32_t), void* user);
@@ -92,7 +93,7 @@ private:
     lenny_sender_callbacks scb_{};
     lenny_receiver_callbacks rcb_{};
     wire::Caps caps_;  // sender: ours
-    lenny_stream_settings preferred_{};
+    lenny_stream_settings preferred_{};  // receiver; under info_mu_ (the UI changes it)
     uint16_t listen_port_ = 0;
 
     std::thread io_;
@@ -117,6 +118,7 @@ private:
     lenny_peer_info peer_info_{};
     lenny_stream_settings settings_{};
     lenny_control_state control_state_{};
+    wire::Caps peer_caps_copy_;  // receiver: last CAPS, for select_stream from the UI thread
 
     // Current link. Written by the I/O thread; read by senders on other threads.
     std::mutex link_mu_;

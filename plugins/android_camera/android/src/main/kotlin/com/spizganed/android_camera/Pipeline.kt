@@ -111,7 +111,8 @@ class Pipeline(private val context: Context) : SenderListener {
         exposure = exposureRange()
         val flat = lenses.flatMapIndexed { i, l -> listOf(i, l.facing) }.toIntArray()
         handle = LennyNative.create(
-            deviceId(context), Build.MODEL, MODES, MAX_BITRATE_KBPS, caps, flat, lensLabels.toTypedArray(), exposure,
+            deviceId(context), Build.MODEL, supportedModes(lenses[state.lens]), MAX_BITRATE_KBPS, caps, flat,
+            lensLabels.toTypedArray(), exposure,
             this,
         )
         check(handle != 0L) { "lenny_sender_create failed" }
@@ -144,12 +145,17 @@ class Pipeline(private val context: Context) : SenderListener {
     // ---- core callbacks (I/O thread) --------------------------------------------------------------------------
 
     override fun onStreamConfig(width: Int, height: Int, fpsNum: Int, fpsDen: Int, bitrateKbps: Int): IntArray {
-        val fps = (fpsNum / maxOf(fpsDen, 1)).coerceIn(15, 30)
+        val fps = (fpsNum / maxOf(fpsDen, 1)).coerceIn(15, 60)
         val bitrate = bitrateKbps.coerceIn(1000, MAX_BITRATE_KBPS)
         main.post {
-            // New stream (first connect or reconnect): back to Auto, except what the user set on the phone itself.
-            resetRemoteOverrides()
-            bindCamera(Settings(width, height, fps, bitrate, state.lens))
+            val s = Settings(width, height, fps, bitrate, state.lens)
+            // Same settings again = a new stream (first connect or reconnect): back to Auto, except what the user set
+            // on the phone itself. Different settings on a running camera = the desktop switched mode mid-stream:
+            // keep the controls. ponytail: a reconnect that also changes the mode keeps remote overrides; pass the
+            // core's link state through JNI if that ever matters.
+            val modeSwitch = bound != null && session != null && s.copy(lens = 0) != bound!!.copy(lens = 0)
+            if (!modeSwitch) resetRemoteOverrides()
+            bindCamera(s)
         }
         return intArrayOf(width, height, fps, 1, bitrate)
     }
@@ -677,7 +683,42 @@ class Pipeline(private val context: Context) : SenderListener {
     companion object {
         private const val TAG = "lenny"
         private const val MAX_BITRATE_KBPS = 20000
-        private val MODES = intArrayOf(1280, 720, 30, 1, 1920, 1080, 30, 1)
+        private val FALLBACK_MODES = intArrayOf(1280, 720, 30, 1, 1920, 1080, 30, 1)
+
+        /** Sizes worth offering, per aspect ratio: 16:9, 4:3, 1:1. Anything else the camera lists is noise. */
+        private val WANTED_SIZES = listOf(
+            3840 to 2160, 2560 to 1440, 1920 to 1080, 1280 to 720,
+            2560 to 1920, 1920 to 1440, 1440 to 1080, 1280 to 960, 960 to 720, 640 to 480,
+            1440 to 1440, 1080 to 1080, 720 to 720,
+        )
+        private val WANTED_FPS = intArrayOf(24, 30, 60)
+
+        /**
+         * CAPS modes (w, h, fps, 1 flattened): every wanted size the camera outputs to the encoder, at every wanted
+         * frame rate that the camera can hold (an AE range topping out exactly there, and a short enough minimum
+         * frame duration) and the AVC encoder accepts. Taken from [l] (the default lens); other lenses clamp.
+         */
+        private fun supportedModes(l: Lens): IntArray {
+            val map = l.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return FALLBACK_MODES
+            val sizes = map.getOutputSizes(MediaCodec::class.java).orEmpty().map { it.width to it.height }.toSet()
+            val aeRanges = l.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).orEmpty()
+            val encoders = android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS).codecInfos
+                .filter { it.isEncoder && MediaFormat.MIMETYPE_VIDEO_AVC in it.supportedTypes }
+                .mapNotNull { runCatching { it.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC).videoCapabilities }.getOrNull() }
+            val modes = mutableListOf<Int>()
+            for ((w, h) in WANTED_SIZES) {
+                if ((w to h) !in sizes) continue
+                val minFrameNs = map.getOutputMinFrameDuration(MediaCodec::class.java, Size(w, h))
+                for (fps in WANTED_FPS) {
+                    if (aeRanges.none { it.upper == fps }) continue
+                    if (minFrameNs > 0 && minFrameNs > 1_000_000_000L / fps) continue
+                    if (encoders.none { it.areSizeAndRateSupported(w, h, fps.toDouble()) }) continue
+                    modes += listOf(w, h, fps, 1)
+                }
+            }
+            Log.i(TAG, "modes: " + modes.chunked(4).joinToString { "${it[0]}x${it[1]}@${it[2]}" })
+            return if (modes.isEmpty()) FALLBACK_MODES else modes.toIntArray()
+        }
         private const val FACING_BACK = 0
         private const val FACING_FRONT = 1
 

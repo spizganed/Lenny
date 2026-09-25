@@ -117,6 +117,11 @@ LENNY_API int32_t lenny_receiver_approve(lenny_session* s, int32_t accept) {
     return guard([&] { return s->approve(accept != 0); });
 }
 
+LENNY_API int32_t lenny_receiver_select_stream(lenny_session* s, const lenny_stream_settings* preferred) {
+    if (!s || !preferred) return LENNY_E_INVALID_ARG;
+    return guard([&] { return s->select_stream(*preferred); });
+}
+
 LENNY_API int32_t lenny_receiver_send_control(lenny_session* s, lenny_control* control) {
     if (!s || !control) return LENNY_E_INVALID_ARG;
     return guard([&] { return s->send_control(*control); });

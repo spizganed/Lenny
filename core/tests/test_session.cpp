@@ -129,7 +129,7 @@ bool streaming(lenny_session* s) { return lenny_session_state(s) == LENNY_STATE_
 
 }  // namespace
 
-TEST(abi_version) { CHECK(lenny_abi_version() == ((1u << 16) | 0u)); }
+TEST(abi_version) { CHECK(lenny_abi_version() == ((1u << 16) | 1u)); }
 
 TEST(full_session_with_approval_video_and_controls) {
     Recv r;
@@ -345,6 +345,35 @@ TEST(update_stream_reaches_receiver_and_latency_is_measured) {
     lenny_stats st{};
     lenny_session_get_stats(rx, &st);
     CHECK(st.latency_us < 200'000);  // same machine: well under 200 ms
+    lenny_session_destroy(tx);
+    lenny_session_destroy(rx);
+}
+
+TEST(receiver_lists_modes_and_switches_mid_stream) {
+    Recv r;
+    Send snd;
+    auto* rx = make_receiver(r);
+    uint8_t id[LENNY_DEVICE_ID_SIZE];
+    std::memset(id, 0x72, sizeof id);
+    lenny_receiver_trust_device(rx, id);
+    auto* tx = make_sender(snd, 0x72);
+    lenny_sender_connect(tx, "127.0.0.1", lenny_receiver_port(rx), nullptr);
+    CHECK(wait_for([&] { return r.starts == 1 && streaming(tx); }));
+
+    lenny_peer_info p{};
+    CHECK(lenny_session_peer(rx, &p) == LENNY_OK);
+    CHECK(p.mode_count == 3 && p.modes[2].width == 3840 && p.modes[2].height == 2160);
+
+    // Ask for 720p mid-stream: the phone gets CAPS_SELECT, the receiver a new STREAM_START.
+    lenny_stream_settings want{LENNY_CODEC_H264, {1280, 720, 30, 1}, 5000, 0, 0};
+    CHECK(lenny_receiver_select_stream(rx, &want) == LENNY_OK);
+    CHECK(wait_for([&] { return r.starts == 2 && snd.configs == 2; }));
+    {
+        std::lock_guard lock(r.mu);
+        CHECK(r.started.mode.width == 1280 && r.started.mode.height == 720);
+    }
+    CHECK(streaming(tx) && streaming(rx));  // no reconnect
+    CHECK(lenny_receiver_select_stream(tx, &want) == LENNY_E_STATE);  // senders don't choose
     lenny_session_destroy(tx);
     lenny_session_destroy(rx);
 }

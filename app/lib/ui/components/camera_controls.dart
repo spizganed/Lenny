@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core_bindings/lenny_bindings.dart';
+import '../../services/core_session.dart';
 import '../../state/camera.dart';
+import '../../state/modes.dart';
 import '../../theme/lenny_tokens.dart';
 import 'sticker.dart';
 
@@ -55,6 +57,56 @@ class FocusButtons extends StatelessWidget {
           ),
         ],
       ]);
+}
+
+/// Auto exposure is always on; this freezes it where it is.
+class ExposureLockToggle extends StatelessWidget {
+  const ExposureLockToggle({super.key, required this.controls, required this.onCommand});
+  final CameraControls controls;
+  final ValueChanged<CameraCommand> onCommand;
+
+  @override
+  Widget build(BuildContext context) => ToggleSticker(
+        label: 'Lock exposure',
+        on: controls.aeLock,
+        onPressed: () => onCommand(Commands.exposureLock(!controls.aeLock)),
+      );
+}
+
+/// Aspect ratio, resolution and frame rate, from the modes the phone offers. Each row only lists what exists for
+/// the rows above it; a tap asks the phone for the nearest mode, which it switches to mid-stream.
+class VideoPicker extends StatelessWidget {
+  const VideoPicker({super.key, required this.modes, required this.current, required this.onSelect});
+  final List<StreamMode> modes;
+  final StreamMode current;
+  final ValueChanged<StreamMode> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    final aspect = aspectOf(current);
+    final aspects = {for (final m in modes) aspectOf(m)}.toList();
+    final heights = {for (final m in modes) if (aspectOf(m) == aspect) m.height}.toList()..sort();
+    final rates = {for (final m in modes) if (aspectOf(m) == aspect && m.height == current.height) m.fps}.toList()..sort();
+    void pick({String? aspect, int? height, int? fps}) {
+      final m = pickMode(modes, current, aspect: aspect, height: height, fps: fps);
+      if (m != null && m != current) onSelect(m);
+    }
+
+    Widget row(String label, List<String> labels, int selected, ValueChanged<int> onTap) => Row(children: [
+          SizedBox(width: 92, child: Text(label, style: LennyTokens.body(size: 14, weight: FontWeight.w700))),
+          Expanded(child: Segmented(labels: labels, selected: selected, onSelect: onTap, height: 44)),
+        ]);
+    return Column(children: [
+      if (aspects.length > 1) ...[
+        row('Aspect', aspects, aspects.indexOf(aspect), (i) => pick(aspect: aspects[i])),
+        const SizedBox(height: 12),
+      ],
+      row('Resolution', [for (final h in heights) resolutionLabel(h)], heights.indexOf(current.height),
+          (i) => pick(height: heights[i])),
+      const SizedBox(height: 12),
+      row('Frame rate', [for (final f in rates) '$f'], rates.indexOf(current.fps), (i) => pick(fps: rates[i])),
+    ]);
+  }
 }
 
 class TorchRow extends StatelessWidget {
@@ -129,7 +181,11 @@ class _ExposureSliderState extends State<ExposureSlider> {
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Row(children: [
         Expanded(child: widget.title == null ? const SizedBox() : Text(widget.title!, style: LennyTokens.button())),
-        Text(_ev(_value), style: LennyTokens.mono(size: 14, weight: FontWeight.w700, color: LennyTokens.lilac)),
+        // Auto exposure is always on; the slider only biases it. Say so, so nobody hunts for an "auto" switch.
+        Text(
+          widget.controls.aeLock ? 'Locked · ${_ev(_value)}' : 'Auto · ${_ev(_value)}',
+          style: LennyTokens.mono(size: 14, weight: FontWeight.w700, color: LennyTokens.lilac),
+        ),
       ]),
       const SizedBox(height: 10),
       Row(children: [

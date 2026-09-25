@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../brand.dart';
+import '../../core_bindings/lenny_bindings.dart';
 import '../../services/core_session.dart';
 import '../../state/providers.dart';
 import '../../state/status_text.dart';
@@ -34,9 +35,27 @@ class ReceiverScreen extends ConsumerWidget {
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               _Header(state: s),
               const SizedBox(height: 28),
+              // Everything fits without scrolling: the preview takes whatever height the cards leave. The column only
+              // scrolls on windows too short for it.
               Expanded(
                 child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                  Expanded(child: _Preview(state: s)),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                      Expanded(child: _Preview(state: s)),
+                      if (streaming) ...[
+                        const SizedBox(height: 24),
+                        IntrinsicHeight(
+                          child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                            if (s.modes.isNotEmpty && s.stream != null) ...[
+                              Expanded(child: _videoCard(s, ref)),
+                              const SizedBox(width: 24),
+                            ],
+                            Expanded(child: _statsCard(s)),
+                          ]),
+                        ),
+                      ],
+                    ]),
+                  ),
                   const SizedBox(width: 28),
                   SizedBox(
                     width: 380,
@@ -57,7 +76,6 @@ class ReceiverScreen extends ConsumerWidget {
   List<Widget> _cameraCards(ReceiverState s, WidgetRef ref) {
     final command = ref.read(receiverProvider.notifier).command;
     const gap = SizedBox(height: 16);
-    String ms(double? v, [int digits = 0]) => v == null ? '–' : '${v.toStringAsFixed(digits)} ms';
     return [
       if (s.caps.hasLenses) ...[
         StickerCard(label: 'Camera', children: [LensPicker(caps: s.caps, controls: s.controls, onCommand: command)]),
@@ -67,30 +85,45 @@ class ReceiverScreen extends ConsumerWidget {
         FocusButtons(caps: s.caps, controls: s.controls, onCommand: command),
         if (s.caps.hasTorch) TorchRow(controls: s.controls, onCommand: command),
       ]),
-      gap,
-      if (s.caps.hasExposure) ...[
-        StickerCard(label: 'Exposure', children: [ExposureSlider(caps: s.caps, controls: s.controls, onCommand: command)]),
+      if (s.caps.hasExposure || s.caps.has(LENNY_CAP_EXPOSURE_LOCK)) ...[
         gap,
+        StickerCard(label: 'Exposure', children: [
+          if (s.caps.hasExposure) ExposureSlider(caps: s.caps, controls: s.controls, onCommand: command),
+          if (s.caps.has(LENNY_CAP_EXPOSURE_LOCK)) ExposureLockToggle(controls: s.controls, onCommand: command),
+        ]),
       ],
-      StickerCard(label: 'Stream', children: [
-        _tiles(
-          StatTile(label: 'Resolution', value: s.stream == null ? '–' : '${s.stream!.width}×${s.stream!.height}'),
-          StatTile(label: 'Frame rate', value: '${s.fps.toStringAsFixed(0)} fps'),
-        ),
-        _tiles(
-          StatTile(label: 'Bitrate', value: '${s.kbps} kbps'),
-          StatTile(label: 'Latency', value: ms(s.displayLatencyMs)),
-        ),
-        _tiles(
-          StatTile(label: 'Network', value: ms(s.networkLatencyMs)),
-          StatTile(label: 'RTT', value: ms(s.rttMs, 1)),
-        ),
-      ]),
     ];
   }
 
-  static Widget _tiles(Widget a, Widget b) =>
-      Row(children: [Expanded(child: a), const SizedBox(width: 12), Expanded(child: b)]);
+  Widget _videoCard(ReceiverState s, WidgetRef ref) {
+    final st = s.stream!;
+    return StickerCard(label: 'Video', children: [
+      VideoPicker(
+        modes: s.modes,
+        current: (width: st.width, height: st.height, fps: st.fps.round()),
+        onSelect: ref.read(receiverProvider.notifier).selectMode,
+      ),
+    ]);
+  }
+
+  Widget _statsCard(ReceiverState s) {
+    String ms(double? v, [int digits = 0]) => v == null ? '–' : '${v.toStringAsFixed(digits)} ms';
+    Widget row(List<Widget> tiles) => Row(children: [
+          for (final (i, t) in tiles.indexed) ...[if (i > 0) const SizedBox(width: 12), Expanded(child: t)],
+        ]);
+    return StickerCard(label: 'Stream', children: [
+      row([
+        StatTile(label: 'Resolution', value: s.stream == null ? '–' : '${s.stream!.width}×${s.stream!.height}'),
+        StatTile(label: 'Frame rate', value: '${s.fps.toStringAsFixed(0)} fps'),
+        StatTile(label: 'Bitrate', value: '${(s.kbps / 1000).toStringAsFixed(1)} Mbps'),
+      ]),
+      row([
+        StatTile(label: 'Latency', value: ms(s.displayLatencyMs)),
+        StatTile(label: 'Network', value: ms(s.networkLatencyMs)),
+        StatTile(label: 'RTT', value: ms(s.rttMs, 1)),
+      ]),
+    ]);
+  }
 
   Future<void> _askApproval(BuildContext context, WidgetRef ref, String name) async {
     final ok = await showStickerDialog<bool>(

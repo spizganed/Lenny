@@ -346,6 +346,19 @@ int32_t Session::send_control(lenny_control& c) {
     return send(wire::Control{c}) ? LENNY_OK : LENNY_E_IO;
 }
 
+int32_t Session::select_stream(const lenny_stream_settings& preferred) {
+    if (role_ != Role::Receiver) return LENNY_E_STATE;
+    wire::Caps caps;
+    {
+        std::lock_guard lock(info_mu_);
+        preferred_ = preferred;
+        caps = peer_caps_copy_;
+    }
+    if (!streaming_) return LENNY_OK;  // used at the next CAPS
+    // The phone answers with STREAM_START + a new VIDEO_CONFIG and keyframe (protocol.md §6.6).
+    return send(wire::CapsSelect{choose_settings(caps, preferred)}) ? LENNY_OK : LENNY_E_IO;
+}
+
 // ---- public: common ------------------------------------------------------
 void Session::set_event_listener(void (*fn)(void*, int32_t, int32_t, int32_t), void* user) {
     std::lock_guard lock(listener_mu_);
@@ -574,7 +587,12 @@ void Session::send_caps(int64_t now) {
 }
 
 void Session::on_caps_complete(int64_t now) {
-    send(wire::CapsSelect{choose_settings(peer_caps_, preferred_)});
+    lenny_stream_settings pref;
+    {
+        std::lock_guard lock(info_mu_);
+        pref = preferred_;
+    }
+    send(wire::CapsSelect{choose_settings(peer_caps_, pref)});
     enter(Phase::StreamStartWait, now, kCapsTimeout);
     set_state(LENNY_STATE_HANDSHAKE);
 }
@@ -743,6 +761,9 @@ int32_t Session::dispatch_receiver(const wire::Header& h, wire::View p, int64_t 
                     peer_info_.exposure_max = peer_caps_.exposure_max;
                     peer_info_.exposure_step_milli = peer_caps_.exposure_step_milli;
                 }
+                peer_info_.mode_count = uint8_t(std::min<size_t>(peer_caps_.modes.size(), LENNY_MAX_PEER_MODES));
+                std::copy_n(peer_caps_.modes.begin(), peer_info_.mode_count, peer_info_.modes);
+                peer_caps_copy_ = peer_caps_;
             }
             if (trusted(peer_.device_id)) {
                 on_caps_complete(now);

@@ -232,14 +232,15 @@ class StickerSwitch extends StatelessWidget {
 
 /// Segmented pill (lenses): selected segment `mint`, others `well`, 3px ink dividers.
 class Segmented extends StatelessWidget {
-  const Segmented({super.key, required this.labels, required this.selected, required this.onSelect});
+  const Segmented({super.key, required this.labels, required this.selected, required this.onSelect, this.height = 52});
   final List<String> labels;
-  final int selected;
+  final int selected; // -1 = none (e.g. the current mode isn't in the list)
   final ValueChanged<int> onSelect;
+  final double height;
 
   @override
   Widget build(BuildContext context) => Container(
-        height: 52,
+        height: height,
         decoration: stickerBox(_T.well, _T.radiusPill, _T.shadowButton),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(_T.radiusPill),

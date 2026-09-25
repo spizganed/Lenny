@@ -31,7 +31,7 @@ extern "C" {
 #endif
 
 #define LENNY_ABI_VERSION_MAJOR 1
-#define LENNY_ABI_VERSION_MINOR 0
+#define LENNY_ABI_VERSION_MINOR 1
 #define LENNY_DEFAULT_PORT 47474
 #define LENNY_DEVICE_ID_SIZE 16
 #define LENNY_PAIR_TOKEN_SIZE 16
@@ -265,6 +265,9 @@ LENNY_API int32_t lenny_receiver_new_pair_token(lenny_session* s, uint32_t ttl_m
 LENNY_API int32_t lenny_receiver_trust_device(lenny_session* s, const uint8_t device_id[LENNY_DEVICE_ID_SIZE]);
 /* Answer on_approval_needed. accept != 0 also trusts the device for the lifetime of this session object. */
 LENNY_API int32_t lenny_receiver_approve(lenny_session* s, int32_t accept);
+/* ABI 1.1. Change the stream settings: the phone mode closest to `preferred` (area, then fps) is requested right away
+ * when streaming (CAPS_SELECT mid-stream) and on every later connect. LENNY_OK also when not streaming yet. */
+LENNY_API int32_t lenny_receiver_select_stream(lenny_session* s, const lenny_stream_settings* preferred);
 /* Send a camera control; req_id is assigned by the core and written back into *control. */
 LENNY_API int32_t lenny_receiver_send_control(lenny_session* s, lenny_control* control);
 
@@ -283,6 +286,7 @@ typedef enum {
 } lenny_event;
 
 #define LENNY_MAX_PEER_LENSES 8
+#define LENNY_MAX_PEER_MODES 32
 
 typedef struct {
     uint8_t device_id[LENNY_DEVICE_ID_SIZE];
@@ -296,6 +300,9 @@ typedef struct {
     char lens_labels[LENNY_MAX_PEER_LENSES][32];         /* UTF-8, NUL-terminated, truncated */
     int32_t exposure_min, exposure_max;                  /* EV*1000; both 0 = no exposure compensation */
     uint32_t exposure_step_milli;
+    /* ABI 1.1: the phone's modes from CAPS, for a resolution / frame-rate picker. */
+    uint8_t mode_count;                                  /* <= LENNY_MAX_PEER_MODES */
+    lenny_mode modes[LENNY_MAX_PEER_MODES];
 } lenny_peer_info;
 
 LENNY_API int32_t lenny_session_set_event_listener(lenny_session* s, void (*fn)(void* user, int32_t event, int32_t a,

@@ -40,6 +40,8 @@ typedef CameraCommand = ({int cmd, int value});
 abstract final class Commands {
   static CameraCommand torch(bool on) => (cmd: lenny_control_cmd.LENNY_CTL_TORCH.value, value: on ? 1 : 0);
   static CameraCommand focusLock(bool on) => (cmd: lenny_control_cmd.LENNY_CTL_FOCUS_LOCK.value, value: on ? 1 : 0);
+  static CameraCommand exposureLock(bool on) =>
+      (cmd: lenny_control_cmd.LENNY_CTL_EXPOSURE_LOCK.value, value: on ? 1 : 0);
   static CameraCommand exposure(int evMilli) => (cmd: lenny_control_cmd.LENNY_CTL_EXPOSURE_COMP.value, value: evMilli);
   static CameraCommand lens(int id) => (cmd: lenny_control_cmd.LENNY_CTL_SELECT_LENS.value, value: id);
   static final CameraCommand auto = (cmd: lenny_control_cmd.LENNY_CTL_RESET_AUTO.value, value: 0);

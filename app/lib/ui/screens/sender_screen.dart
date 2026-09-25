@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../brand.dart';
+import '../../core_bindings/lenny_bindings.dart';
 import '../../services/core_session.dart';
 import '../../services/pc_link.dart';
 import '../../state/providers.dart';
@@ -127,6 +128,8 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
                     if (s.caps.hasTorch) TorchRow(controls: s.controls, onCommand: ctl.command),
                     if (s.caps.hasExposure)
                       ExposureSlider(caps: s.caps, controls: s.controls, onCommand: ctl.command, title: 'Exposure'),
+                    if (s.caps.has(LENNY_CAP_EXPOSURE_LOCK))
+                      ExposureLockToggle(controls: s.controls, onCommand: ctl.command),
                   ]),
                 ],
               ]),

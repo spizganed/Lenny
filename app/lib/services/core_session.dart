@@ -23,12 +23,16 @@ class CoreEvent {
   final int a, b;
 }
 
+/// One resolution + frame rate the phone offers (CAPS mode).
+typedef StreamMode = ({int width, int height, int fps});
+
 class PeerInfo {
-  const PeerInfo(this.deviceId, this.name, this.platform, this.caps);
+  const PeerInfo(this.deviceId, this.name, this.platform, this.caps, this.modes);
   final String deviceId; // hex, stable per phone install
   final String name;
   final int platform;
   final CameraCaps caps; // receiver: the phone's camera, from its CAPS
+  final List<StreamMode> modes; // receiver: what the phone can stream
 }
 
 class StreamInfo {
@@ -84,6 +88,11 @@ class CoreSession {
         }
         final hasExposure = r.exposure_step_milli != 0;
         final id = [for (var i = 0; i < LENNY_DEVICE_ID_SIZE; i++) r.device_id[i].toRadixString(16).padLeft(2, '0')];
+        final modes = <StreamMode>[
+          for (var i = 0; i < r.mode_count; i++)
+            if (r.modes[i].fps_den != 0)
+              (width: r.modes[i].width, height: r.modes[i].height, fps: r.modes[i].fps_num ~/ r.modes[i].fps_den),
+        ];
         return PeerInfo(
           id.join(),
           _cString(r.name, 64),
@@ -93,6 +102,7 @@ class CoreSession {
             lenses: lenses,
             exposure: hasExposure ? (min: r.exposure_min, max: r.exposure_max, step: r.exposure_step_milli) : null,
           ),
+          modes,
         );
       });
 
@@ -148,6 +158,19 @@ class CoreSession {
           reconnects: s.ref.reconnects,
           latencyUs: s.ref.latency_us,
         );
+      });
+
+  /// Receiver: ask the phone for [mode] now (if streaming) and on every later connect.
+  int selectStream(StreamMode mode, int bitrateKbps) => using((arena) {
+        final s = arena<lenny_stream_settings>();
+        s.ref
+          ..codec = LENNY_CODEC_H264
+          ..mode.width = mode.width
+          ..mode.height = mode.height
+          ..mode.fps_num = mode.fps
+          ..mode.fps_den = 1
+          ..bitrate_kbps = bitrateKbps;
+        return core.lenny_receiver_select_stream(_ptr, s);
       });
 
   /// Receiver: answer an approval prompt.

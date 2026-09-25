@@ -140,7 +140,12 @@ class SenderController extends Notifier<SenderState> {
 
   /// Scans a desktop's QR code and connects with its pairing token (no approval prompt on the PC).
   Future<void> scanAndConnect() async {
-    final raw = await ref.read(senderServiceProvider).scanQr();
+    final String? raw;
+    try {
+      raw = await ref.read(senderServiceProvider).scanQr();
+    } catch (e) {
+      return setError('Could not open the QR scanner: $e');
+    }
     if (raw == null) return; // cancelled
     final PcLink? link;
     try {
@@ -193,6 +198,7 @@ class ReceiverState {
     this.phone,
     this.stream,
     this.caps = const CameraCaps(),
+    this.modes = const [],
     this.controls = const CameraControls(),
     this.fps = 0,
     this.kbps = 0,
@@ -212,6 +218,7 @@ class ReceiverState {
   final String? phone;
   final StreamInfo? stream;
   final CameraCaps caps; // the connected phone's camera
+  final List<StreamMode> modes; // what the phone can stream
   final CameraControls controls;
   final double fps;
   final int kbps;
@@ -228,6 +235,7 @@ class ReceiverState {
     String? Function()? phone,
     StreamInfo? Function()? stream,
     CameraCaps? caps,
+    List<StreamMode>? modes,
     CameraControls? controls,
     double? fps,
     int? kbps,
@@ -246,6 +254,7 @@ class ReceiverState {
         phone: phone != null ? phone() : this.phone,
         stream: stream != null ? stream() : this.stream,
         caps: caps ?? this.caps,
+        modes: modes ?? this.modes,
         controls: controls ?? this.controls,
         fps: fps ?? this.fps,
         kbps: kbps ?? this.kbps,
@@ -264,7 +273,7 @@ class ReceiverController extends Notifier<ReceiverState> {
   CoreStats? _lastStats;
   final _discovery = DiscoveryResponder();
 
-  static const _trustedKey = 'trustedPhones';
+  static const _trustedKey = 'trustedPhones', _modeKey = 'streamMode';
   static const _pairTtl = Duration(seconds: 90), _pairRefresh = Duration(seconds: 80);
 
   @override
@@ -287,6 +296,12 @@ class ReceiverController extends Notifier<ReceiverState> {
       final prefs = await SharedPreferences.getInstance();
       for (final id in prefs.getStringList(_trustedKey) ?? const <String>[]) {
         r.session.trustDevice(id);
+      }
+      // The mode picked last time; the core asks every phone for the closest one it has.
+      final saved = prefs.getStringList(_modeKey)?.map(int.tryParse).toList();
+      if (saved != null && saved.length == 3 && !saved.contains(null)) {
+        final m = (width: saved[0]!, height: saved[1]!, fps: saved[2]!);
+        r.session.selectStream(m, _bitrateFor(m));
       }
       _sub = r.session.events.listen(_onEvent);
       _onEvent(CoreEvent(lenny_event.LENNY_EVENT_STATE, r.session.state.index, 0)); // catch up
@@ -312,6 +327,7 @@ class ReceiverController extends Notifier<ReceiverState> {
           pendingPhone: link == LinkState.awaitingApproval ? null : () => null,
           phone: () => peer?.name,
           caps: peer?.caps ?? const CameraCaps(),
+          modes: peer?.modes ?? const [],
           stream: live ? null : () => null,
           controls: live ? null : const CameraControls(),
         );
@@ -350,6 +366,16 @@ class ReceiverController extends Notifier<ReceiverState> {
       pairUri: PcLink(hosts: state.addresses, port: state.port, name: Platform.localHostname, token: token).toUri(),
     );
   }
+
+  /// Resolution / frame rate from the Video card. The phone switches mid-stream; remembered for next time.
+  Future<void> selectMode(StreamMode m) async {
+    _session?.selectStream(m, _bitrateFor(m));
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_modeKey, ['${m.width}', '${m.height}', '${m.fps}']);
+  }
+
+  /// ~0.13 bit per pixel: 1080p30 ≈ 8 Mbps (what the defaults used), 4K30 and 1080p60 get more. The phone clamps.
+  static int _bitrateFor(StreamMode m) => (m.width * m.height * m.fps * 0.13 / 1000).round().clamp(2000, 20000);
 
   void approve(bool accept) {
     _session?.approve(accept);

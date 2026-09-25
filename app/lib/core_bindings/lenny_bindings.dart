@@ -109,6 +109,30 @@ class LennyBindings {
   late final _lenny_receiver_port = _lenny_receiver_portPtr
       .asFunction<int Function(ffi.Pointer<lenny_session>)>();
 
+  int lenny_receiver_select_stream(
+    ffi.Pointer<lenny_session> s,
+    ffi.Pointer<lenny_stream_settings> preferred,
+  ) {
+    return _lenny_receiver_select_stream(s, preferred);
+  }
+
+  late final _lenny_receiver_select_streamPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<lenny_session>,
+            ffi.Pointer<lenny_stream_settings>,
+          )
+        >
+      >('lenny_receiver_select_stream');
+  late final _lenny_receiver_select_stream = _lenny_receiver_select_streamPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<lenny_session>,
+          ffi.Pointer<lenny_stream_settings>,
+        )
+      >();
+
   int lenny_receiver_send_control(
     ffi.Pointer<lenny_session> s,
     ffi.Pointer<lenny_control> control,
@@ -539,7 +563,7 @@ class LennyBindings {
 
 const int LENNY_ABI_VERSION_MAJOR = 1;
 
-const int LENNY_ABI_VERSION_MINOR = 0;
+const int LENNY_ABI_VERSION_MINOR = 1;
 
 const int LENNY_ACK_BUSY = 3;
 
@@ -584,6 +608,8 @@ const int LENNY_FRAME_KEYFRAME = 1;
 const int LENNY_FRAME_MIRROR = 2;
 
 const int LENNY_MAX_PEER_LENSES = 8;
+
+const int LENNY_MAX_PEER_MODES = 32;
 
 const int LENNY_OK = 0;
 
@@ -850,6 +876,12 @@ final class lenny_peer_info extends ffi.Struct {
 
   @ffi.Uint32()
   external int exposure_step_milli;
+
+  @ffi.Uint8()
+  external int mode_count;
+
+  @ffi.Array.multi([32])
+  external ffi.Array<lenny_mode> modes;
 }
 
 final class lenny_receiver_callbacks extends ffi.Struct {
