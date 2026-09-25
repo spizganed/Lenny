@@ -25,40 +25,51 @@ class ReceiverScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(title: const Text(Brand.desktopAppName)),
       body: SafeArea(
-        child: ListView(padding: const EdgeInsets.all(16), children: [
-          Row(children: [
-            const MascotSlot(size: 56),
-            const SizedBox(width: 12),
-            Expanded(child: StatusLine(link: s.link, text: s.phone != null ? '$status · ${s.phone}' : status)),
-          ]),
-          const SizedBox(height: 12),
-          if (s.port != 0) SelectableText('On your phone, connect to: $where   port ${s.port}'),
-          const SizedBox(height: 16),
-          AspectRatio(
-            aspectRatio: 16 / 9,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: Colors.black,
-                border: Border.all(color: LennyColors.outline, width: 3),
-                borderRadius: BorderRadius.circular(18),
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(15),
-                child: streaming && s.textureId != null
-                    ? Texture(textureId: s.textureId!)
-                    : Center(child: Text(streaming ? 'Waiting for video…' : 'No phone connected')),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              const MascotSlot(size: 56),
+              const SizedBox(width: 12),
+              Expanded(child: StatusLine(link: s.link, text: s.phone != null ? '$status · ${s.phone}' : status)),
+            ]),
+            const SizedBox(height: 12),
+            if (s.port != 0) SelectableText('On your phone, connect to: $where   port ${s.port}'),
+            const SizedBox(height: 16),
+            // The preview takes whatever height is left, so the stats line below always stays visible.
+            Expanded(
+              child: Center(
+                child: AspectRatio(
+                  aspectRatio: 16 / 9,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: Colors.black,
+                      border: Border.all(color: LennyColors.outline, width: 3),
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(15),
+                      child: streaming && s.textureId != null
+                          ? Texture(textureId: s.textureId!)
+                          : Center(child: Text(streaming ? 'Waiting for video…' : 'No phone connected')),
+                    ),
+                  ),
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 12),
-          if (streaming)
-            Text([
-              if (s.stream != null) '${s.stream!.width}×${s.stream!.height}',
-              '${s.fps.toStringAsFixed(0)} fps',
-              '${s.kbps} kbps',
-              if (s.rttMs != null) 'RTT ${s.rttMs!.toStringAsFixed(1)} ms',
-            ].join('   ·   ')),
-        ]),
+            const SizedBox(height: 12),
+            Text(
+              streaming
+                  ? [
+                      if (s.stream != null) '${s.stream!.width}×${s.stream!.height}',
+                      '${s.fps.toStringAsFixed(0)} fps',
+                      '${s.kbps} kbps',
+                      if (s.rttMs != null) 'RTT ${s.rttMs!.toStringAsFixed(1)} ms',
+                    ].join('   ·   ')
+                  : ' ',
+            ),
+          ]),
+        ),
       ),
     );
   }

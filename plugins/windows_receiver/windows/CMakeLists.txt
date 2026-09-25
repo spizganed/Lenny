@@ -30,7 +30,10 @@ list(APPEND PLUGIN_SOURCES
 # The shared core, built as lenny_core.dll. Dart FFI opens this same DLL, so the plugin and Dart share sessions.
 set(LENNY_SHARED ON CACHE BOOL "" FORCE)
 set(LENNY_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../../core" "${CMAKE_CURRENT_BINARY_DIR}/lenny_core")
+# Flutter builds plugins through a link in app/windows/flutter/ephemeral, which CMake doesn't resolve on Windows,
+# so locate /core from the app instead (CMAKE_SOURCE_DIR = app/windows). Monorepo layout; override if it moves.
+set(LENNY_CORE_DIR "${CMAKE_SOURCE_DIR}/../../core" CACHE PATH "Path to Lenny's /core")
+add_subdirectory("${LENNY_CORE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/lenny_core")
 
 # Define the plugin library target. Its name must not be changed (see comment
 # on PLUGIN_NAME above).
