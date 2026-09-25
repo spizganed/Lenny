@@ -117,16 +117,31 @@ LENNY_API int32_t lenny_receiver_send_control(lenny_session* s, lenny_control* c
     return guard([&] { return s->send_control(*control); });
 }
 
-LENNY_API int32_t lenny_session_set_state_listener(lenny_session* s, void (*fn)(void*, lenny_state, int32_t),
+LENNY_API int32_t lenny_session_set_event_listener(lenny_session* s, void (*fn)(void*, int32_t, int32_t, int32_t),
                                                    void* user) {
     if (!s) return LENNY_E_INVALID_ARG;
     return guard([&] {
-        s->set_state_listener(fn, user);
+        s->set_event_listener(fn, user);
         return LENNY_OK;
     });
 }
 
-LENNY_API lenny_state lenny_session_state(lenny_session* s) { return s ? s->state() : LENNY_STATE_CLOSED; }
+LENNY_API int32_t lenny_session_peer(lenny_session* s, lenny_peer_info* out) {
+    if (!s || !out) return LENNY_E_INVALID_ARG;
+    return guard([&] { return s->peer(*out) ? LENNY_OK : LENNY_E_STATE; });
+}
+
+LENNY_API int32_t lenny_session_stream_settings(lenny_session* s, lenny_stream_settings* out) {
+    if (!s || !out) return LENNY_E_INVALID_ARG;
+    return guard([&] { return s->stream_settings(*out) ? LENNY_OK : LENNY_E_STATE; });
+}
+
+LENNY_API int32_t lenny_session_control_state(lenny_session* s, lenny_control_state* out) {
+    if (!s || !out) return LENNY_E_INVALID_ARG;
+    return guard([&] { return s->control_state(*out) ? LENNY_OK : LENNY_E_STATE; });
+}
+
+LENNY_API int32_t lenny_session_state(lenny_session* s) { return s ? s->state() : LENNY_STATE_CLOSED; }
 
 LENNY_API int32_t lenny_session_get_stats(lenny_session* s, lenny_stats* out) {
     if (!s || !out) return LENNY_E_INVALID_ARG;

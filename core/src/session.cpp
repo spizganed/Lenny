@@ -213,10 +213,35 @@ int32_t Session::send_control(lenny_control& c) {
 }
 
 // ---- public: common ------------------------------------------------------
-void Session::set_state_listener(void (*fn)(void*, lenny_state, int32_t), void* user) {
+void Session::set_event_listener(void (*fn)(void*, int32_t, int32_t, int32_t), void* user) {
     std::lock_guard lock(listener_mu_);
     listener_fn_ = fn;
     listener_user_ = user;
+}
+
+void Session::emit(int32_t event, int32_t a, int32_t b) {
+    // Called under the lock on purpose: once set_event_listener(nullptr) returns, no call is in flight, so the UI
+    // can free its callback (Dart: NativeCallable.close) right after.
+    std::lock_guard lock(listener_mu_);
+    if (listener_fn_) listener_fn_(listener_user_, event, a, b);
+}
+
+bool Session::peer(lenny_peer_info& out) {
+    std::lock_guard lock(info_mu_);
+    out = peer_info_;
+    return has_peer_;
+}
+
+bool Session::stream_settings(lenny_stream_settings& out) {
+    std::lock_guard lock(info_mu_);
+    out = settings_;
+    return has_settings_;
+}
+
+bool Session::control_state(lenny_control_state& out) {
+    std::lock_guard lock(info_mu_);
+    out = control_state_;
+    return has_control_state_;
 }
 
 lenny_stats Session::stats() {
@@ -245,14 +270,7 @@ void Session::set_state(lenny_state s, int32_t reason) {
     if (old == s && old_reason == reason) return;
     if (role_ == Role::Sender && scb_.on_state) scb_.on_state(scb_.user, s, reason);
     if (role_ == Role::Receiver && rcb_.on_state) rcb_.on_state(rcb_.user, s, reason);
-    void (*fn)(void*, lenny_state, int32_t);
-    void* user;
-    {
-        std::lock_guard lock(listener_mu_);
-        fn = listener_fn_;
-        user = listener_user_;
-    }
-    if (fn) fn(user, s, reason);
+    emit(LENNY_EVENT_STATE, s, reason);
 }
 
 void Session::sender_loop(std::string host, uint16_t port) {
@@ -433,6 +451,15 @@ int32_t Session::on_hello(wire::View payload, int64_t now) {
     if (h.proto_major != wire::kVersionMajor) return goodbye(LENNY_REASON_VERSION);
     if (h.role == hello_.role) return goodbye(LENNY_REASON_ROLE);
     peer_ = h;
+    {
+        std::lock_guard lock(info_mu_);
+        peer_info_ = {};
+        std::copy(h.device_id.begin(), h.device_id.end(), peer_info_.device_id);
+        const size_t n = std::min(h.device_name.size(), sizeof peer_info_.name - 1);
+        std::copy_n(h.device_name.begin(), n, peer_info_.name);
+        peer_info_.platform = h.platform;
+        has_peer_ = true;
+    }
     minor_ = std::min(wire::kVersionMinor, h.proto_minor);
     next_ping_ = now + kPingInterval;
     if (role_ == Role::Receiver) {
@@ -495,6 +522,12 @@ int32_t Session::dispatch_sender(const wire::Header& h, wire::View p, int64_t no
             lenny_stream_settings eff = sel.s;
             if (scb_.on_stream_config) scb_.on_stream_config(scb_.user, &sel.s, &eff);
             if (!send(wire::StreamStart{eff})) return LENNY_REASON_LINK_LOST;
+            {
+                std::lock_guard lock(info_mu_);
+                settings_ = eff;
+                has_settings_ = true;
+            }
+            emit(LENNY_EVENT_STREAM_START);
             if (phase_ != Phase::Streaming) {
                 enter(Phase::Streaming, now, 0);
                 reached_streaming_ = true;
@@ -555,6 +588,7 @@ int32_t Session::dispatch_receiver(const wire::Header& h, wire::View p, int64_t 
                 set_state(LENNY_STATE_AWAITING_APPROVAL);
                 if (rcb_.on_approval_needed)
                     rcb_.on_approval_needed(rcb_.user, peer_.device_id.data(), peer_.device_name.c_str());
+                emit(LENNY_EVENT_APPROVAL_NEEDED);
             }
             break;
         }
@@ -566,7 +600,13 @@ int32_t Session::dispatch_receiver(const wire::Header& h, wire::View p, int64_t 
                 streaming_ = true;
                 set_state(LENNY_STATE_STREAMING);
             }
+            {
+                std::lock_guard lock(info_mu_);
+                settings_ = s.s;
+                has_settings_ = true;
+            }
             if (rcb_.on_stream_start) rcb_.on_stream_start(rcb_.user, &s.s);
+            emit(LENNY_EVENT_STREAM_START);
             break;
         }
         default: break;
@@ -597,19 +637,27 @@ int32_t Session::dispatch_receiver(const wire::Header& h, wire::View p, int64_t 
         case wire::MsgType::ControlState: {
             wire::ControlState s;
             if (!wire::decode(p, s)) { bad(); break; }
+            {
+                std::lock_guard lock(info_mu_);
+                control_state_ = s.s;
+                has_control_state_ = true;
+            }
             if (rcb_.on_control_state) rcb_.on_control_state(rcb_.user, &s.s);
+            emit(LENNY_EVENT_CONTROL_STATE);
             break;
         }
         case wire::MsgType::ControlAck: {
             wire::ControlAck a;
             if (!wire::decode(p, a)) { bad(); break; }
             if (rcb_.on_control_ack) rcb_.on_control_ack(rcb_.user, a.req_id, a.result);
+            emit(LENNY_EVENT_CONTROL_ACK, int32_t(a.req_id), a.result);
             break;
         }
         case wire::MsgType::StreamStatus: {
             wire::StreamStatus s;
             if (!wire::decode(p, s)) { bad(); break; }
             if (rcb_.on_stream_status) rcb_.on_stream_status(rcb_.user, s.state, s.reason.c_str());
+            emit(LENNY_EVENT_STREAM_STATUS, s.state);
             break;
         }
         default: break;

@@ -46,7 +46,10 @@ public:
     int32_t send_control(lenny_control& c);
 
     // Common
-    void set_state_listener(void (*fn)(void*, lenny_state, int32_t), void* user);
+    void set_event_listener(void (*fn)(void*, int32_t, int32_t, int32_t), void* user);
+    bool peer(lenny_peer_info& out);
+    bool stream_settings(lenny_stream_settings& out);
+    bool control_state(lenny_control_state& out);
     lenny_state state() const { return state_.load(); }
     lenny_stats stats();
     void disconnect();
@@ -100,8 +103,16 @@ private:
     std::atomic<lenny_state> state_{LENNY_STATE_IDLE};
 
     std::mutex listener_mu_;
-    void (*listener_fn_)(void*, lenny_state, int32_t) = nullptr;
+    void (*listener_fn_)(void*, int32_t, int32_t, int32_t) = nullptr;
     void* listener_user_ = nullptr;
+    void emit(int32_t event, int32_t a = 0, int32_t b = 0);
+
+    // Snapshots for the UI getters
+    std::mutex info_mu_;
+    bool has_peer_ = false, has_settings_ = false, has_control_state_ = false;
+    lenny_peer_info peer_info_{};
+    lenny_stream_settings settings_{};
+    lenny_control_state control_state_{};
 
     // Current link. Written by the I/O thread; read by senders on other threads.
     std::mutex link_mu_;

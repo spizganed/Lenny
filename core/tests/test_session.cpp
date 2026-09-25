@@ -107,7 +107,7 @@ lenny_session* make_sender(Send& snd, uint8_t id_byte = 0x11) {
     cfg.exposure_comp_step_milli = 333;
     lenny_sender_callbacks cb{};
     cb.user = &snd;
-    cb.on_state = [](void* u, lenny_state st, int32_t reason) {
+    cb.on_state = [](void* u, int32_t st, int32_t reason) {
         if (st == LENNY_STATE_CLOSED) static_cast<Send*>(u)->last_reason = reason;
     };
     cb.on_stream_config = [](void* u, const lenny_stream_settings*, lenny_stream_settings* eff) {
@@ -205,6 +205,40 @@ TEST(full_session_with_approval_video_and_controls) {
     CHECK(snd.last_reason == LENNY_REASON_USER);
     CHECK(wait_for([&] { return lenny_session_state(rx) == LENNY_STATE_CONNECTING; }));
 
+    lenny_session_destroy(tx);
+    lenny_session_destroy(rx);
+}
+
+TEST(ui_events_carry_ints_and_getters_have_details) {
+    struct Ev {
+        std::atomic<int> approval{0}, start{0}, streaming{0}, ack{0};
+    } ev;
+    Recv r;
+    Send snd;
+    auto* rx = make_receiver(r);
+    auto* tx = make_sender(snd);
+    lenny_peer_info peer{};
+    CHECK(lenny_session_peer(rx, &peer) == LENNY_E_STATE);  // nobody yet
+    lenny_session_set_event_listener(rx, [](void* u, int32_t e, int32_t a, int32_t) {
+        auto* ev = static_cast<Ev*>(u);
+        if (e == LENNY_EVENT_APPROVAL_NEEDED) ev->approval++;
+        if (e == LENNY_EVENT_STREAM_START) ev->start++;
+        if (e == LENNY_EVENT_STATE && a == LENNY_STATE_STREAMING) ev->streaming++;
+        if (e == LENNY_EVENT_CONTROL_ACK) ev->ack++;
+    }, &ev);
+    lenny_sender_connect(tx, "127.0.0.1", lenny_receiver_port(rx), nullptr);
+    CHECK(wait_for([&] { return ev.approval == 1; }));
+    CHECK(lenny_session_peer(rx, &peer) == LENNY_OK);
+    CHECK(std::strcmp(peer.name, "Pixel") == 0 && peer.platform == LENNY_PLATFORM_ANDROID && peer.device_id[0] == 0x11);
+    lenny_receiver_approve(rx, 1);
+    CHECK(wait_for([&] { return ev.start == 1 && ev.streaming == 1; }));
+    lenny_stream_settings st{};
+    CHECK(lenny_session_stream_settings(rx, &st) == LENNY_OK && st.mode.width == 1920);
+    lenny_stream_settings tx_st{};
+    CHECK(lenny_session_stream_settings(tx, &tx_st) == LENNY_OK && tx_st.bitrate_kbps == 10000);
+    lenny_control key{0, LENNY_CTL_KEYFRAME_REQUEST, 0, 0, 0};
+    lenny_receiver_send_control(rx, &key);
+    CHECK(wait_for([&] { return ev.ack == 1; }));
     lenny_session_destroy(tx);
     lenny_session_destroy(rx);
 }

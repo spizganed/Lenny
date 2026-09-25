@@ -1,0 +1,19 @@
+name: android_camera
+description: "Lenny sender pipeline for Android: CameraX capture, MediaCodec H.264, foreground service."
+version: 0.0.1
+publish_to: none
+
+environment:
+  sdk: ^3.13.4
+  flutter: '>=3.3.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.spizganed.android_camera
+        pluginClass: AndroidCameraPlugin

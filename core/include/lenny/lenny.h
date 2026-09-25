@@ -45,7 +45,8 @@ enum {
     LENNY_E_INTERNAL = -4  /* bug or allocation failure; logged, never thrown */
 };
 
-/* ---- Session state (reported via on_state) ---------------------------- */
+/* ---- Session state (reported via on_state) ----------------------------
+ * Enum types never cross the ABI (their size is compiler-defined); functions and callbacks use int32_t. */
 typedef enum {
     LENNY_STATE_IDLE = 0,
     LENNY_STATE_CONNECTING = 1,        /* sender: dialing. receiver: listening */
@@ -204,7 +205,7 @@ typedef struct {
 
 typedef struct {
     void* user;
-    void (*on_state)(void* user, lenny_state state, int32_t reason);
+    void (*on_state)(void* user, int32_t state /* lenny_state */, int32_t reason);
     /* Receiver asked for settings. `effective` is prefilled with `requested`; the platform clamps it to what the
      * camera/encoder can do and reconfigures. Core then sends STREAM_START with `effective`. */
     void (*on_stream_config)(void* user, const lenny_stream_settings* requested, lenny_stream_settings* effective);
@@ -233,7 +234,7 @@ typedef struct {
 /* All receiver callbacks return void so Dart can use NativeCallable.listener for the UI ones. */
 typedef struct {
     void* user;
-    void (*on_state)(void* user, lenny_state state, int32_t reason);
+    void (*on_state)(void* user, int32_t state /* lenny_state */, int32_t reason);
     /* Unknown phone connected without a QR token. Answer with lenny_receiver_approve within 30 s. */
     void (*on_approval_needed)(void* user, const uint8_t device_id[LENNY_DEVICE_ID_SIZE], const char* device_name);
     void (*on_stream_start)(void* user, const lenny_stream_settings* effective);
@@ -258,9 +259,32 @@ LENNY_API int32_t lenny_receiver_approve(lenny_session* s, int32_t accept);
 LENNY_API int32_t lenny_receiver_send_control(lenny_session* s, lenny_control* control);
 
 /* ---- Common ----------------------------------------------------------- */
-/* Dart-side status listener, separate from the native callbacks (either may be NULL). */
-LENNY_API int32_t lenny_session_set_state_listener(lenny_session* s, void (*fn)(void* user, lenny_state, int32_t), void* user);
-LENNY_API lenny_state lenny_session_state(lenny_session* s);
+/* UI events, for Dart (NativeCallable.listener) or any other UI layer. Events carry plain integers only, because
+ * async listeners run after the callback returned, when pointers would already dangle. Fetch details with the
+ * getters below. Runs on the I/O thread, in addition to the native callbacks. After set_event_listener(s, NULL, NULL)
+ * returns, the old listener is never called again. The listener must not call lenny_session_set_event_listener. */
+typedef enum {
+    LENNY_EVENT_STATE = 1,             /* a = lenny_state, b = reason */
+    LENNY_EVENT_APPROVAL_NEEDED = 2,   /* receiver; details: lenny_session_peer */
+    LENNY_EVENT_STREAM_START = 3,      /* details: lenny_session_stream_settings */
+    LENNY_EVENT_STREAM_STATUS = 4,     /* receiver; a = LENNY_STREAM_* */
+    LENNY_EVENT_CONTROL_STATE = 5,     /* receiver; details: lenny_session_control_state */
+    LENNY_EVENT_CONTROL_ACK = 6        /* receiver; a = req_id, b = LENNY_ACK_* */
+} lenny_event;
+
+typedef struct {
+    uint8_t device_id[LENNY_DEVICE_ID_SIZE];
+    char name[64];     /* UTF-8, NUL-terminated, truncated */
+    uint8_t platform;  /* LENNY_PLATFORM_*, 0 if unknown */
+} lenny_peer_info;
+
+LENNY_API int32_t lenny_session_set_event_listener(lenny_session* s, void (*fn)(void* user, int32_t event, int32_t a,
+                                                                                 int32_t b), void* user);
+/* Details of the current / most recent peer, stream and camera state. LENNY_E_STATE if not known yet. */
+LENNY_API int32_t lenny_session_peer(lenny_session* s, lenny_peer_info* out);
+LENNY_API int32_t lenny_session_stream_settings(lenny_session* s, lenny_stream_settings* out);
+LENNY_API int32_t lenny_session_control_state(lenny_session* s, lenny_control_state* out);
+LENNY_API int32_t lenny_session_state(lenny_session* s); /* lenny_state */
 LENNY_API int32_t lenny_session_get_stats(lenny_session* s, lenny_stats* out);
 /* Sends GOODBYE(USER), stops reconnecting / listening. Idempotent. A phone that receives USER stops retrying. */
 LENNY_API int32_t lenny_session_disconnect(lenny_session* s);

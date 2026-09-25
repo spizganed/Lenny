@@ -1,0 +1,13 @@
+# Regenerate after changing core/include/lenny/lenny.h:  dart run ffigen
+name: LennyBindings
+description: Generated from core/include/lenny/lenny.h. Do not edit.
+output: lib/core_bindings/lenny_bindings.dart
+headers:
+  entry-points:
+    - ../core/include/lenny/lenny.h
+  include-directives:
+    - ../core/include/lenny/lenny.h
+llvm-path:
+  - 'C:\Program Files\LLVM'
+preamble: |
+  // ignore_for_file: type=lint

@@ -1,0 +1,18 @@
+name: windows_receiver
+description: "Lenny receiver pipeline for Windows: core session, Media Foundation H.264 decode, preview texture."
+version: 0.0.1
+publish_to: none
+
+environment:
+  sdk: ^3.13.4
+  flutter: '>=3.3.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      windows:
+        pluginClass: WindowsReceiverPluginCApi
