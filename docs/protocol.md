@@ -242,9 +242,12 @@ One streaming sender per receiver in 1.0. A second sender gets `GOODBYE(BUSY)`.
   Late frames (past target + 100 ms) are decoded but not displayed, except keyframes.
 
 ## 9. Backpressure (sender)
-If the socket's unsent bytes exceed ~250 ms of bitrate, the sender drops frames until the next keyframe,
-requests one from its encoder, and lowers bitrate one step (−20%, recovering +10% per 5 s of healthy RTT).
-Old video is never queued, because freshness matters more than completeness.
+The sender queues outgoing video and writes it from its own thread, so a slow network never blocks the encoder.
+When the frames waiting in that queue span more than 250 ms of capture time, the sender drops the backlog (keeping only
+the newest queued keyframe), drops new frames until the next keyframe, requests one from its encoder, and lowers the
+bitrate one step (−20%, min 1 Mbps; +10% back per 5 s without congestion, up to the negotiated rate). The kernel send
+buffer is capped at 128 KiB so the backlog stays visible to this check. Old video is never queued, because freshness
+matters more than completeness.
 
 ## 10. Examples (hex)
 HELLO from a sender, protocol 1.0, minimal:

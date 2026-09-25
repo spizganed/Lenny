@@ -61,6 +61,11 @@ LENNY_API int32_t lenny_sender_send_video_frame(lenny_session* s, const uint8_t*
     return guard([&] { return s->send_video_frame(data, size, pts_us, orientation, flags); });
 }
 
+LENNY_API int32_t lenny_sender_update_stream(lenny_session* s, const lenny_stream_settings* effective) {
+    if (!s || !effective) return LENNY_E_INVALID_ARG;
+    return guard([&] { return s->update_stream(*effective); });
+}
+
 LENNY_API int32_t lenny_sender_send_control_state(lenny_session* s, const lenny_control_state* state) {
     if (!s || !state) return LENNY_E_INVALID_ARG;
     return guard([&] { return s->send_control_state(*state); });

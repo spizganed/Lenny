@@ -22,6 +22,13 @@ constexpr int kConnectTimeoutMs = 2000;
 constexpr int kBackoffMs[] = {250, 500, 1000, 2000};
 constexpr uint32_t kDefaultBitrateKbps = 8000;
 constexpr size_t kMaxVideoConfig = 60000;  // must fit one TLV field
+// Congestion control (protocol.md §9): more than this much video waiting to be sent = we're behind.
+// Measured in capture time, not bytes: a single keyframe can be bigger than 250 ms of average bitrate.
+constexpr int64_t kQueueBudgetUs = 250 * kMs;
+constexpr uint32_t kMinBitrateKbps = 1000;
+constexpr int64_t kRaiseInterval = 5 * kSec;  // healthy for this long -> +10% bitrate
+// Kernel send buffer on the phone. Autotuned buffers can grow to megabytes and hide a second of backlog from us.
+constexpr int kSenderSocketBuffer = 128 * 1024;
 
 bool fatal_for_sender(int32_t reason) {
     return reason == LENNY_REASON_VERSION || reason == LENNY_REASON_ROLE || reason == LENNY_REASON_PAIR_DENIED ||
@@ -80,6 +87,7 @@ Session::Session(const lenny_sender_config& cfg, const lenny_sender_callbacks& c
         caps_.exposure_max = cfg.exposure_comp_max;
         caps_.exposure_step_milli = cfg.exposure_comp_step_milli;
     }
+    video_writer_ = std::thread([this] { video_writer_loop(); });
 }
 
 Session::Session(const lenny_receiver_config& cfg, const lenny_receiver_callbacks& cb)
@@ -92,14 +100,23 @@ Session::Session(const lenny_receiver_config& cfg, const lenny_receiver_callback
 Session::~Session() {
     bye_reason_ = LENNY_REASON_NORMAL;
     disconnect();
-    if (!io_.joinable()) return;
-    // Normally the I/O thread exits within ~50 ms. If it's stuck in a blocked send, force the socket shut.
-    for (int i = 0; i < 20 && !io_done_; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    if (!io_done_) {
-        std::lock_guard lock(link_mu_);
-        if (link_) link_->shutdown();
+    if (io_.joinable()) {
+        // Normally the I/O thread exits within ~50 ms. If it's stuck in a blocked send, force the socket shut.
+        for (int i = 0; i < 20 && !io_done_; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (!io_done_) {
+            std::lock_guard lock(link_mu_);
+            if (link_) link_->shutdown();
+        }
+        io_.join();
     }
-    io_.join();
+    if (video_writer_.joinable()) {
+        {
+            std::lock_guard lock(vq_mu_);
+            vq_stop_ = true;
+        }
+        vq_cv_.notify_all();
+        video_writer_.join();
+    }
 }
 
 bool Session::join_finished_thread() {
@@ -125,13 +142,18 @@ int32_t Session::send_video_config(const uint8_t* data, size_t size) {
     if (role_ != Role::Sender) return LENNY_E_STATE;
     if (!data || size == 0 || size > kMaxVideoConfig) return LENNY_E_INVALID_ARG;
     {
-        std::lock_guard lock(video_mu_);
+        std::lock_guard lock(vq_mu_);
         video_config_.assign(data, data + size);
+        // Queued (not sent directly) so it stays in order with the frames around it.
+        if (streaming_) {
+            Outgoing o;
+            o.msg = wire::to_message(wire::VideoConfig{LENNY_CODEC_H264, video_config_}, minor_);
+            vq_bytes_ += o.msg.size();
+            vq_.push_back(std::move(o));
+        }
     }
-    if (!streaming_) return LENNY_OK;  // cached; goes out before the next keyframe
-    wire::VideoConfig vc;
-    vc.config.assign(data, data + size);
-    return send(vc) ? LENNY_OK : LENNY_E_IO;
+    vq_cv_.notify_one();
+    return LENNY_OK;
 }
 
 int32_t Session::send_video_frame(const uint8_t* data, size_t size, int64_t pts_us, uint8_t orientation,
@@ -139,26 +161,138 @@ int32_t Session::send_video_frame(const uint8_t* data, size_t size, int64_t pts_
     if (role_ != Role::Sender) return LENNY_E_STATE;
     if (!data || size == 0 || size > wire::kMaxVideoPayload - wire::kVideoFrameMetaSize) return LENNY_E_INVALID_ARG;
     if (!streaming_) return LENNY_E_STATE;
-    // ponytail: blocking send on the caller's thread. M3 adds the drop-until-keyframe backpressure (protocol.md §9).
-    std::lock_guard lock(video_mu_);
-    if ((flags & LENNY_FRAME_KEYFRAME) && !video_config_.empty()) {
-        // SPS/PPS before every keyframe, so a receiver that just joined or lost its decoder recovers (§6.8).
-        wire::VideoConfig vc;
-        vc.config = video_config_;
-        if (!send(vc)) return LENNY_E_IO;
+    const bool key = flags & LENNY_FRAME_KEYFRAME;
+    bool congested = false;
+    uint32_t new_kbps = 0;
+    {
+        std::lock_guard lock(vq_mu_);
+        if (drop_until_key_ && !key) return LENNY_OK;  // P-frames without their keyframe are useless
+        auto oldest = std::find_if(vq_.begin(), vq_.end(), [](const Outgoing& o) { return o.frame; });
+        if (!key && oldest != vq_.end() && pts_us - oldest->pts_us > kQueueBudgetUs) {
+            // Behind by more than ~250 ms: that video is too old to be worth sending. Drop the backlog, restart from a
+            // fresh keyframe, and send less from now on.
+            drop_backlog();
+            drop_until_key_ = true;
+            congested = true;
+            last_congestion_ = now_us();
+            new_kbps = std::max(kMinBitrateKbps, current_kbps_ * 8 / 10);
+            if (new_kbps == current_kbps_) new_kbps = 0;
+            if (new_kbps) current_kbps_ = new_kbps;
+        } else {
+            if (key) {
+                drop_until_key_ = false;
+                // SPS/PPS before every keyframe, so a receiver that just joined or lost its decoder recovers (§6.8).
+                if (!video_config_.empty()) {
+                    Outgoing c;
+                    c.msg = wire::to_message(wire::VideoConfig{LENNY_CODEC_H264, video_config_}, minor_);
+                    vq_bytes_ += c.msg.size();
+                    vq_.push_back(std::move(c));
+                }
+            }
+            Outgoing o;
+            o.frame = true;
+            o.key = key;
+            o.pts_us = pts_us;
+            o.msg.resize(wire::kHeaderSize + wire::kVideoFrameMetaSize + size);
+            wire::Header h;
+            h.ver_minor = minor_;
+            h.type = static_cast<uint16_t>(wire::MsgType::VideoFrame);
+            h.length = static_cast<uint32_t>(wire::kVideoFrameMetaSize + size);
+            wire::put_header(o.msg.data(), h);
+            wire::encode_video_meta(o.msg.data() + wire::kHeaderSize,
+                                    {frame_seq_++, pts_us, uint8_t(orientation & 3), flags});
+            std::copy(data, data + size, o.msg.begin() + wire::kHeaderSize + wire::kVideoFrameMetaSize);
+            o.payload = size;
+            vq_bytes_ += o.msg.size();
+            vq_.push_back(std::move(o));
+        }
     }
-    uint8_t head[wire::kHeaderSize + wire::kVideoFrameMetaSize];
-    wire::Header h;
-    h.ver_minor = minor_;
-    h.type = static_cast<uint16_t>(wire::MsgType::VideoFrame);
-    h.length = static_cast<uint32_t>(wire::kVideoFrameMetaSize + size);
-    wire::put_header(head, h);
-    wire::encode_video_meta(head + wire::kHeaderSize, {frame_seq_++, pts_us, uint8_t(orientation & 3), flags});
-    if (!send_raw(head, sizeof head, data, size)) return LENNY_E_IO;
-    std::lock_guard slock(stats_mu_);
-    stats_.frames++;
-    stats_.bytes += size;
+    if (congested) {
+        {
+            std::lock_guard lock(stats_mu_);
+            stats_.dropped_frames++;
+            if (new_kbps) stats_.bitrate_kbps = new_kbps;
+        }
+        lenny_control key_req{0, LENNY_CTL_KEYFRAME_REQUEST, 0, 0, 0};
+        if (scb_.on_control) scb_.on_control(scb_.user, &key_req);
+        if (new_kbps && scb_.on_bitrate) scb_.on_bitrate(scb_.user, new_kbps);
+        return LENNY_OK;
+    }
+    vq_cv_.notify_one();
     return LENNY_OK;
+}
+
+int32_t Session::update_stream(const lenny_stream_settings& s) {
+    if (role_ != Role::Sender) return LENNY_E_STATE;
+    if (!streaming_) return LENNY_E_STATE;
+    {
+        std::lock_guard lock(info_mu_);
+        settings_ = s;
+    }
+    return send(wire::StreamStart{s}) ? LENNY_OK : LENNY_E_IO;
+}
+
+void Session::drop_backlog() {
+    // Keep only the newest queued keyframe (and the config right before it): it's what the receiver can restart from.
+    // Everything else, especially P-frames that depend on dropped frames, goes.
+    std::deque<Outgoing> keep;
+    for (size_t i = vq_.size(); i-- > 0;) {
+        if (!vq_[i].key) continue;
+        if (i > 0 && !vq_[i - 1].frame) keep.push_back(std::move(vq_[i - 1]));
+        keep.push_back(std::move(vq_[i]));
+        break;
+    }
+    vq_.swap(keep);
+    vq_bytes_ = 0;
+    for (const auto& o : vq_) vq_bytes_ += o.msg.size();
+}
+
+void Session::reset_video_queue() {
+    std::lock_guard lock(vq_mu_);
+    vq_.clear();
+    vq_bytes_ = 0;
+    drop_until_key_ = true;
+}
+
+void Session::video_writer_loop() {
+    for (;;) {
+        Outgoing o;
+        uint32_t raised = 0;
+        {
+            std::unique_lock lock(vq_mu_);
+            vq_cv_.wait_for(lock, std::chrono::seconds(1), [&] { return vq_stop_ || !vq_.empty(); });
+            if (vq_stop_) return;
+            // Healthy for a while: creep back up towards the negotiated bitrate.
+            const int64_t now = now_us();
+            if (current_kbps_ < target_kbps_ && now - last_congestion_ > kRaiseInterval && now >= next_raise_) {
+                current_kbps_ = std::min(target_kbps_, current_kbps_ * 11 / 10 + 1);
+                raised = current_kbps_;
+                next_raise_ = now + kRaiseInterval;
+            }
+            if (!vq_.empty()) {
+                o = std::move(vq_.front());
+                vq_.pop_front();
+                vq_bytes_ -= std::min(vq_bytes_, o.msg.size());
+            }
+        }
+        if (raised) {
+            {
+                std::lock_guard lock(stats_mu_);
+                stats_.bitrate_kbps = raised;
+            }
+            if (scb_.on_bitrate) scb_.on_bitrate(scb_.user, raised);
+        }
+        if (o.msg.empty()) continue;
+        if (!send_raw(o.msg.data(), o.msg.size())) {
+            reset_video_queue();  // link is gone; the next link starts from a keyframe
+            continue;
+        }
+        if (o.payload) {
+            std::lock_guard lock(stats_mu_);
+            stats_.frames++;
+            stats_.bytes += o.payload;
+        }
+    }
 }
 
 int32_t Session::send_control_state(const lenny_control_state& s) {
@@ -278,7 +412,7 @@ void Session::sender_loop(std::string host, uint16_t port) {
     int32_t reason = LENNY_REASON_NORMAL;
     set_state(LENNY_STATE_CONNECTING);
     while (!stop_) {
-        if (auto t = tcp_connect(host, port, kConnectTimeoutMs, stop_)) {
+        if (auto t = tcp_connect(host, port, kConnectTimeoutMs, stop_, kSenderSocketBuffer)) {
             reason = run_link(std::shared_ptr<ITransport>(std::move(t)));
             if (reached_streaming_) attempt = 0;
             if (fatal_for_sender(reason)) break;
@@ -365,6 +499,7 @@ int32_t Session::run_link(std::shared_ptr<ITransport> t) {
     }
 
     streaming_ = false;
+    if (role_ == Role::Sender) reset_video_queue();
     {
         std::lock_guard lock(link_mu_);
         link_.reset();
@@ -521,6 +656,16 @@ int32_t Session::dispatch_sender(const wire::Header& h, wire::View p, int64_t no
             if ((phase_ != Phase::CapsWait && phase_ != Phase::Streaming) || !wire::decode(p, sel)) break;
             lenny_stream_settings eff = sel.s;
             if (scb_.on_stream_config) scb_.on_stream_config(scb_.user, &sel.s, &eff);
+            {
+                std::lock_guard lock(vq_mu_);
+                target_kbps_ = current_kbps_ = eff.bitrate_kbps ? eff.bitrate_kbps : kDefaultBitrateKbps;
+                last_congestion_ = 0;
+                next_raise_ = 0;
+            }
+            {
+                std::lock_guard lock(stats_mu_);
+                stats_.bitrate_kbps = eff.bitrate_kbps;
+            }
             if (!send(wire::StreamStart{eff})) return LENNY_REASON_LINK_LOST;
             {
                 std::lock_guard lock(info_mu_);
@@ -627,7 +772,11 @@ int32_t Session::dispatch_receiver(const wire::Header& h, wire::View p, int64_t 
             lenny_video_frame f{m.frame_seq, m.pts_us, 0, m.orientation, m.flags, data.data(), data.size()};
             {
                 std::lock_guard lock(stats_mu_);
-                if (clock_.valid()) f.local_pts_us = m.pts_us - clock_.offset_us();
+                if (clock_.valid()) {
+                    f.local_pts_us = m.pts_us - clock_.offset_us();
+                    const int64_t age = now - f.local_pts_us;  // capture -> received on this machine
+                    stats_.latency_us = stats_.latency_us < 0 ? age : (stats_.latency_us * 7 + age) / 8;
+                }
                 stats_.frames++;
                 stats_.bytes += data.size();
             }

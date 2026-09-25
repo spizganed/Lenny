@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -34,6 +35,7 @@ public:
     int32_t connect(const std::string& host, uint16_t port, const uint8_t* pair_token);
     int32_t send_video_config(const uint8_t* data, size_t size);
     int32_t send_video_frame(const uint8_t* data, size_t size, int64_t pts_us, uint8_t orientation, uint8_t flags);
+    int32_t update_stream(const lenny_stream_settings& s);
     int32_t send_control_state(const lenny_control_state& s);
     int32_t send_stream_status(uint8_t state, const char* reason);
 
@@ -82,6 +84,8 @@ private:
     void enter(Phase p, int64_t now, int64_t timeout_us);
     bool trusted(const wire::DeviceId& id);
     void sleep_interruptible(int ms);
+    void video_writer_loop();
+    void reset_video_queue();  // new link: empty queue, wait for a keyframe
 
     const Role role_;
     wire::Hello hello_;  // our HELLO
@@ -132,9 +136,26 @@ private:
     bool reached_streaming_ = false;  // this link got to STREAMING (resets sender backoff)
     bool ever_streamed_ = false;      // counts reconnects
 
-    std::mutex video_mu_;
-    wire::Bytes video_config_;  // sender: resent before every keyframe
+    // Sender video queue (protocol.md §9). The encoder thread copies frames in; video_writer_ sends them, so a slow
+    // network never blocks the encoder. Everything below is guarded by vq_mu_.
+    struct Outgoing {
+        wire::Bytes msg;
+        size_t payload = 0;  // video bytes, for stats
+        int64_t pts_us = 0;  // frames only
+        bool frame = false, key = false;
+    };
+    void drop_backlog();  // vq_mu_ held
+    std::mutex vq_mu_;
+    std::condition_variable vq_cv_;
+    std::deque<Outgoing> vq_;
+    size_t vq_bytes_ = 0;
+    bool drop_until_key_ = true;
+    bool vq_stop_ = false;
+    wire::Bytes video_config_;  // resent before every keyframe
     uint32_t frame_seq_ = 0;
+    uint32_t target_kbps_ = 0, current_kbps_ = 0;  // negotiated vs. after congestion control
+    int64_t last_congestion_ = 0, next_raise_ = 0;
+    std::thread video_writer_;
 
     // Receiver
     TcpListener listener_;
@@ -146,7 +167,7 @@ private:
 
     std::mutex stats_mu_;
     ClockSync clock_;
-    lenny_stats stats_{-1, 0, 0, 0, 0, 0};
+    lenny_stats stats_{-1, 0, 0, 0, 0, 0, -1, 0, 0};
 };
 
 }  // namespace lenny

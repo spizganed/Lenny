@@ -22,8 +22,9 @@ public:
 };
 
 // Connects with a timeout, trying every address `host` resolves to. `cancel` aborts early.
+// send_buffer > 0 caps the kernel send buffer, so queued video stays visible to our own congestion control.
 std::unique_ptr<ITransport> tcp_connect(const std::string& host, uint16_t port, int timeout_ms,
-                                        const std::atomic<bool>& cancel);
+                                        const std::atomic<bool>& cancel, int send_buffer = 0);
 
 class TcpListener {
 public:

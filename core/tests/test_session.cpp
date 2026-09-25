@@ -243,6 +243,108 @@ TEST(ui_events_carry_ints_and_getters_have_details) {
     lenny_session_destroy(rx);
 }
 
+TEST(slow_network_drops_to_keyframe_and_lowers_bitrate_without_blocking) {
+    // A receiver that falls behind (it sleeps in the frame callback, so its socket stops draining) must not make the
+    // phone's encoder thread block, and the phone must shed load: drop backlog, ask for a keyframe, lower bitrate.
+    struct Slow {
+        std::atomic<int> frames{0};
+    } slow;
+    lenny_receiver_config rcfg{};
+    rcfg.identity = ident(0xDD, "Desk", LENNY_PLATFORM_WINDOWS);
+    rcfg.preferred = {LENNY_CODEC_H264, {1280, 720, 30, 1}, 2000, 0, 0};
+    lenny_receiver_callbacks rcb{};
+    rcb.user = &slow;
+    rcb.on_video_frame = [](void* u, const lenny_video_frame*) {
+        static_cast<Slow*>(u)->frames++;
+        std::this_thread::sleep_for(50ms);
+    };
+    auto* rx = lenny_receiver_create(&rcfg, &rcb);
+    lenny_receiver_start(rx);
+    uint8_t id[LENNY_DEVICE_ID_SIZE];
+    std::memset(id, 0x61, sizeof id);
+    lenny_receiver_trust_device(rx, id);
+
+    struct Tx {
+        std::atomic<int> keyframes{0};
+        std::atomic<uint32_t> kbps{0};
+    } txs;
+    lenny_sender_config scfg{};
+    scfg.identity = ident(0x61, "Pixel", LENNY_PLATFORM_ANDROID);
+    scfg.modes = kModes;
+    scfg.mode_count = 3;
+    scfg.max_bitrate_kbps = 2000;
+    lenny_sender_callbacks scb{};
+    scb.user = &txs;
+    scb.on_control = [](void* u, const lenny_control* c) -> int32_t {
+        if (c->cmd == LENNY_CTL_KEYFRAME_REQUEST) static_cast<Tx*>(u)->keyframes++;
+        return LENNY_ACK_OK;
+    };
+    scb.on_bitrate = [](void* u, uint32_t kbps) { static_cast<Tx*>(u)->kbps = kbps; };
+    auto* tx = lenny_sender_create(&scfg, &scb);
+    lenny_sender_connect(tx, "127.0.0.1", lenny_receiver_port(rx), nullptr);
+    CHECK(wait_for([&] { return streaming(tx) && streaming(rx); }));
+
+    // 2 Mbps target, but we push 60 KB frames (~14 Mbps at 30 fps) as fast as we can: far more than the slow
+    // receiver takes. Keyframe every 10th frame.
+    // Timestamps advance like a real 30 fps camera even though we push faster than real time.
+    std::vector<uint8_t> frame(60 * 1024, 0xAB);
+    auto worst = std::chrono::steady_clock::duration::zero();
+    const int64_t base = lenny_now_us();
+    for (int i = 0; i < 300; ++i) {
+        const auto t0 = std::chrono::steady_clock::now();
+        CHECK(lenny_sender_send_video_frame(tx, frame.data(), frame.size(), base + i * 33'333, 0,
+                                            i % 10 == 0 ? LENNY_FRAME_KEYFRAME : 0) == LENNY_OK);
+        worst = std::max(worst, std::chrono::steady_clock::now() - t0);
+    }
+    CHECK(worst < 20ms);  // the encoder thread never waited on the network
+    lenny_stats st{};
+    lenny_session_get_stats(tx, &st);
+    CHECK(st.dropped_frames > 0);
+    CHECK(txs.keyframes > 1);                          // one at stream start, more after drops
+    CHECK(txs.kbps > 0 && txs.kbps < 2000);           // bitrate stepped down
+    CHECK(st.bitrate_kbps == txs.kbps);
+    CHECK(wait_for([&] { return slow.frames > 0; }));  // some got through...
+    CHECK(slow.frames < 300);                           // ...but not the whole backlog
+    lenny_session_destroy(tx);
+    lenny_session_destroy(rx);
+}
+
+TEST(update_stream_reaches_receiver_and_latency_is_measured) {
+    Recv r;
+    Send snd;
+    auto* rx = make_receiver(r);
+    uint8_t id[LENNY_DEVICE_ID_SIZE];
+    std::memset(id, 0x71, sizeof id);
+    lenny_receiver_trust_device(rx, id);
+    auto* tx = make_sender(snd, 0x71);
+    lenny_sender_connect(tx, "127.0.0.1", lenny_receiver_port(rx), nullptr);
+    CHECK(wait_for([&] { return r.starts == 1 && streaming(tx); }));
+
+    // Camera picked 1280x720 instead of the requested 1080p.
+    lenny_stream_settings actual{LENNY_CODEC_H264, {1280, 720, 30, 1}, 10000, 0, 0};
+    CHECK(lenny_sender_update_stream(tx, &actual) == LENNY_OK);
+    CHECK(wait_for([&] { return r.starts == 2; }));
+    {
+        std::lock_guard lock(r.mu);
+        CHECK(r.started.mode.width == 1280 && r.started.mode.height == 720);
+    }
+
+    // Latency appears once clock sync has a sample (first PING after ~1 s).
+    const uint8_t idr[] = {0, 0, 0, 1, 0x65};
+    CHECK(wait_for([&] {
+        lenny_sender_send_video_frame(tx, idr, sizeof idr, lenny_now_us(), 0, LENNY_FRAME_KEYFRAME);
+        std::this_thread::sleep_for(30ms);
+        lenny_stats st{};
+        lenny_session_get_stats(rx, &st);
+        return st.latency_us >= 0;
+    }));
+    lenny_stats st{};
+    lenny_session_get_stats(rx, &st);
+    CHECK(st.latency_us < 200'000);  // same machine: well under 200 ms
+    lenny_session_destroy(tx);
+    lenny_session_destroy(rx);
+}
+
 TEST(qr_token_skips_approval_and_is_single_use) {
     Recv r;
     Send a, b;

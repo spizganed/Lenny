@@ -173,6 +173,9 @@ typedef struct {
     uint64_t bytes;            /* video payload bytes sent or received */
     uint32_t bad_messages;     /* malformed control messages ignored */
     uint32_t reconnects;
+    int64_t latency_us;        /* receiver: capture -> received, smoothed (needs clock sync); -1 if unknown */
+    uint32_t dropped_frames;   /* sender: frames dropped because the network fell behind */
+    uint32_t bitrate_kbps;     /* sender: current encoder target after congestion control */
 } lenny_stats;
 
 /* Local identity, sent in HELLO. */
@@ -212,6 +215,8 @@ typedef struct {
     /* Camera control from the receiver (also KEYFRAME_REQUEST, which the core itself issues on every new stream).
      * Return LENNY_ACK_*. */
     int32_t (*on_control)(void* user, const lenny_control* control);
+    /* Congestion control changed the target bitrate (protocol.md §9). Apply it to the encoder. May be NULL. */
+    void (*on_bitrate)(void* user, uint32_t kbps);
 } lenny_sender_callbacks;
 
 LENNY_API lenny_session* lenny_sender_create(const lenny_sender_config* config, const lenny_sender_callbacks* callbacks);
@@ -219,8 +224,13 @@ LENNY_API lenny_session* lenny_sender_create(const lenny_sender_config* config, 
  * may be NULL; it's used for the first successful handshake only, since tokens are single-use. */
 LENNY_API int32_t lenny_sender_connect(lenny_session* s, const char* host, uint16_t port, const uint8_t* pair_token);
 LENNY_API int32_t lenny_sender_send_video_config(lenny_session* s, const uint8_t* data, size_t size);
+/* Never blocks on the network: the frame is copied into a queue and written by a core thread. When the queue holds
+ * more than ~250 ms of video, the backlog is dropped, the core asks for a keyframe (on_control KEYFRAME_REQUEST) and
+ * lowers the bitrate (on_bitrate). Frames are also dropped until that keyframe arrives. Returns LENNY_OK either way. */
 LENNY_API int32_t lenny_sender_send_video_frame(lenny_session* s, const uint8_t* data, size_t size, int64_t pts_us,
                                                 uint8_t orientation, uint8_t flags);
+/* The camera settled on different settings than announced (e.g. another resolution): re-sends STREAM_START. */
+LENNY_API int32_t lenny_sender_update_stream(lenny_session* s, const lenny_stream_settings* effective);
 LENNY_API int32_t lenny_sender_send_control_state(lenny_session* s, const lenny_control_state* state);
 LENNY_API int32_t lenny_sender_send_stream_status(lenny_session* s, uint8_t state, const char* reason);
 

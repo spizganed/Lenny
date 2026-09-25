@@ -131,7 +131,7 @@ private:
 }  // namespace
 
 std::unique_ptr<ITransport> tcp_connect(const std::string& host, uint16_t port, int timeout_ms,
-                                        const std::atomic<bool>& cancel) {
+                                        const std::atomic<bool>& cancel, int send_buffer) {
     net_init();
     addrinfo hints{};
     hints.ai_family = AF_UNSPEC;
@@ -145,6 +145,8 @@ std::unique_ptr<ITransport> tcp_connect(const std::string& host, uint16_t port, 
     for (addrinfo* ai = res; ai && !out && !cancel; ai = ai->ai_next) {
         socket_t s = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (s == kInvalid) continue;
+        if (send_buffer > 0)
+            setsockopt(s, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<const char*>(&send_buffer), sizeof send_buffer);
         // Non-blocking connect: a blocking one to an unreachable IP hangs ~21 s on Windows.
         set_nonblocking(s, true);
         bool ok = ::connect(s, ai->ai_addr, static_cast<int>(ai->ai_addrlen)) == 0;
