@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../brand.dart';
 import '../../services/core_session.dart';
@@ -17,7 +18,12 @@ class ReceiverScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     ref.listen(receiverProvider.select((s) => s.pendingPhone), (_, name) {
-      if (name != null) _askApproval(context, ref, name);
+      if (name != null) {
+        _askApproval(context, ref, name);
+      } else {
+        // The request went away on its own (timeout, phone gave up): drop the stale prompt.
+        Navigator.of(context).popUntil((r) => r is! DialogRoute);
+      }
     });
     final s = ref.watch(receiverProvider);
     final streaming = s.link == LinkState.streaming;
@@ -35,7 +41,15 @@ class ReceiverScreen extends ConsumerWidget {
               Expanded(child: StatusLine(link: s.link, text: s.phone != null ? '$status · ${s.phone}' : status)),
             ]),
             const SizedBox(height: 12),
-            if (s.port != 0) SelectableText('On your phone, connect to: $where   port ${s.port}'),
+            if (s.port != 0)
+              Row(children: [
+                if (s.pairUri != null && !streaming) ...[
+                  // Scan with Lenny on the phone: connects without the approval prompt.
+                  ColoredBox(color: Colors.white, child: QrImageView(data: s.pairUri!, size: 140)),
+                  const SizedBox(width: 16),
+                ],
+                Expanded(child: SelectableText('Scan the code with Lenny, or connect to: $where   port ${s.port}')),
+              ]),
             const SizedBox(height: 16),
             // The preview takes whatever height is left, so the stats line below always stays visible.
             Expanded(
