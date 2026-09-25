@@ -64,15 +64,10 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
       body: DotBackground(
         spacing: 22,
         child: SafeArea(
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 480),
-              child: ListView(padding: const EdgeInsets.all(20), children: [
-                Text(Brand.appName, style: LennyTokens.wordmark(38)),
-                const SizedBox(height: 20),
-                _StatusHero(state: s),
-                const SizedBox(height: 16),
-                StickerCard(label: 'Connection', children: [
+          child: OrientationBuilder(builder: (context, o) {
+            final title = Text(Brand.appName, style: LennyTokens.wordmark(38));
+            final hero = _StatusHero(state: s);
+            final connection = StickerCard(label: 'Connection', children: [
                   StickerField(
                     label: 'PC address',
                     controller: _host,
@@ -119,10 +114,10 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
                       else
                         for (final pc in found) _FoundPc(pc: pc, onTap: () => _connectTo(pc)),
                   ],
-                ]),
-                if (streaming) ...[
-                  const SizedBox(height: 16),
-                  StickerCard(label: 'Camera', children: [
+                ]);
+            final camera = !streaming
+                ? null
+                : StickerCard(label: 'Camera', children: [
                     if (s.caps.hasLenses) LensPicker(caps: s.caps, controls: s.controls, onCommand: ctl.command),
                     FocusButtons(caps: s.caps, controls: s.controls, onCommand: ctl.command),
                     if (s.caps.hasTorch) TorchRow(controls: s.controls, onCommand: ctl.command),
@@ -130,11 +125,23 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
                       ExposureSlider(caps: s.caps, controls: s.controls, onCommand: ctl.command, title: 'Exposure'),
                     if (s.caps.has(LENNY_CAP_EXPOSURE_LOCK))
                       ExposureLockToggle(controls: s.controls, onCommand: ctl.command),
-                  ]),
-                ],
-              ]),
-            ),
-          ),
+                  ]);
+            const gap = SizedBox(height: 16);
+            Widget column(List<Widget> children) => ListView(padding: const EdgeInsets.all(20), children: children);
+            // Landscape: status + connection left, camera controls right, instead of one thin centered strip.
+            if (o == Orientation.landscape) {
+              return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                Expanded(child: column([title, gap, hero, gap, connection])),
+                if (camera != null) Expanded(child: column([camera])),
+              ]);
+            }
+            return Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 480),
+                child: column([title, const SizedBox(height: 20), hero, gap, connection, if (camera != null) ...[gap, camera]]),
+              ),
+            );
+          }),
         ),
       ),
     );

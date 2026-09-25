@@ -41,7 +41,8 @@ class ReceiverScreen extends ConsumerWidget {
                 child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                   Expanded(
                     child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                      Expanded(child: _Preview(state: s)),
+                      // Capped so the space under it is free for controls; the virtual camera is the real output.
+                      Flexible(child: ConstrainedBox(constraints: const BoxConstraints(maxHeight: 380), child: _Preview(state: s))),
                       if (streaming) ...[
                         const SizedBox(height: 24),
                         IntrinsicHeight(
@@ -61,7 +62,12 @@ class ReceiverScreen extends ConsumerWidget {
                     width: 380,
                     // Room for the card shadows, which paint outside the list's box.
                     child: ListView(padding: const EdgeInsets.only(right: 8, bottom: 8), children: [
-                      if (streaming) ..._cameraCards(s, ref) else _PairCard(pairUri: s.pairUri),
+                      _linkButton(s, ref),
+                      const SizedBox(height: 16),
+                      if (streaming)
+                        ..._cameraCards(s, ref)
+                      else if (!_stopped(s))
+                        _PairCard(pairUri: s.pairUri),
                     ]),
                   ),
                 ]),
@@ -71,6 +77,20 @@ class ReceiverScreen extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  static bool _stopped(ReceiverState s) => s.link == LinkState.closed && s.reason == LENNY_REASON_USER;
+
+  Widget _linkButton(ReceiverState s, WidgetRef ref) {
+    final ctl = ref.read(receiverProvider.notifier);
+    return _stopped(s)
+        ? StickerButton(label: 'Connect', icon: Icons.link_rounded, kind: ButtonKind.primary, onPressed: ctl.connect)
+        : StickerButton(
+            label: 'Disconnect',
+            icon: Icons.link_off_rounded,
+            kind: ButtonKind.destructive,
+            onPressed: ctl.disconnect,
+          );
   }
 
   List<Widget> _cameraCards(ReceiverState s, WidgetRef ref) {
@@ -166,6 +186,13 @@ class _Header extends StatelessWidget {
           text: s.phone != null ? '$status · ${s.phone}' : status,
         ),
       ),
+      if (s.link == LinkState.streaming && s.controls.battery != null) ...[
+        const SizedBox(width: 12),
+        StickerBadge(
+          text: 'Battery ${s.controls.battery}%${s.controls.charging ? ' · charging' : ''}',
+          fill: s.controls.battery! <= 20 && !s.controls.charging ? LennyTokens.coral : LennyTokens.surface,
+        ),
+      ],
       const SizedBox(width: 24),
       // Wraps under itself on narrow windows instead of overflowing.
       Expanded(

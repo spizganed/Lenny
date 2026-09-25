@@ -31,7 +31,7 @@ extern "C" {
 #endif
 
 #define LENNY_ABI_VERSION_MAJOR 1
-#define LENNY_ABI_VERSION_MINOR 1
+#define LENNY_ABI_VERSION_MINOR 2
 #define LENNY_DEFAULT_PORT 47474
 #define LENNY_DEVICE_ID_SIZE 16
 #define LENNY_PAIR_TOKEN_SIZE 16
@@ -148,6 +148,8 @@ typedef struct {
     uint8_t torch;
     uint8_t lens_id;
     uint16_t zoom;          /* ratio*100 */
+    uint8_t battery;        /* phone battery percent 0..100, 255 unknown (ABI 1.2) */
+    uint8_t charging;       /* bool (ABI 1.2) */
 } lenny_control_state;
 
 /* STREAM_STATUS states. */

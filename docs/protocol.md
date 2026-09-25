@@ -208,7 +208,8 @@ CONTROL payload: tag 1 `req_id` u32, then exactly one command tag:
 CONTROL_ACK: tag 1 `req_id`, tag 2 `result` u8 (0 OK, 1 UNSUPPORTED, 2 FAILED, 3 BUSY).
 CONTROL_STATE: full current state, sent after STREAM_START, after every change, and on reconnect:
 1 af_mode u8 (0 continuous, 1 locked, 2 focusing), 2 exposure_comp i32, 3 exposure_lock u8,
-4 wb_lock u8, 5 torch u8, 6 lens_id u8, 7 zoom u16.
+4 wb_lock u8, 5 torch u8, 6 lens_id u8, 7 zoom u16, 8 battery u8 (percent, 255 unknown; absent = unknown),
+9 charging u8 bool. The phone also resends it every 60 s so the battery level stays current (1.2).
 
 **Default state is Auto.** Every session starts with continuous AF, AE on, AWB auto, EV 0, torch off.
 Only the phone's own UI locks survive a reconnect (the phone re-applies them and reports via CONTROL_STATE).

@@ -119,6 +119,8 @@ class CoreSession {
           torch: r.torch != 0,
           lens: r.lens_id,
           zoom100: r.zoom,
+          battery: r.battery > 100 ? null : r.battery,
+          charging: r.charging != 0,
         );
       });
 

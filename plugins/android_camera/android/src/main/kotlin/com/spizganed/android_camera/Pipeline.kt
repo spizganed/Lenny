@@ -14,6 +14,7 @@ import android.hardware.camera2.params.MeteringRectangle
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -129,6 +130,7 @@ class Pipeline(private val context: Context) : SenderListener {
         stopped = true
         orientationListener.disable()
         main.removeCallbacks(focusTimeout)
+        main.removeCallbacks(batteryTick)
         closeSession() // encoder released when the session reports closed
         device?.close()
         device = null
@@ -165,7 +167,11 @@ class Pipeline(private val context: Context) : SenderListener {
             encoder?.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) })
             // The core asks for a keyframe at every stream (re)start: also a good moment to tell the receiver
             // what the camera is doing.
-            main.post { publishState() }
+            main.post {
+                publishState()
+                main.removeCallbacks(batteryTick)
+                main.postDelayed(batteryTick, BATTERY_PERIOD_MS)
+            }
             return LennyNative.ACK_OK // no encoder yet = the first frame will be a keyframe anyway
         }
         if (!supported(cmd, value)) return LennyNative.ACK_UNSUPPORTED
@@ -326,7 +332,19 @@ class Pipeline(private val context: Context) : SenderListener {
 
     private fun publishState() {
         onStateChanged?.invoke(state)
-        if (handle != 0L) LennyNative.sendControlState(handle, state.toArray()) // not streaming -> ignored
+        if (handle == 0L) return
+        val bm = context.getSystemService(BatteryManager::class.java)
+        val pct = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        val battery = intArrayOf(if (pct in 0..100) pct else 255, if (bm.isCharging) 1 else 0)
+        LennyNative.sendControlState(handle, state.toArray() + battery) // not streaming -> ignored
+    }
+
+    /** Battery rides on CONTROL_STATE; resend it now and then so the PC's number stays fresh. */
+    private val batteryTick = object : Runnable {
+        override fun run() {
+            publishState()
+            main.postDelayed(this, BATTERY_PERIOD_MS)
+        }
     }
 
     private fun updateOrientation() {
@@ -682,6 +700,7 @@ class Pipeline(private val context: Context) : SenderListener {
 
     companion object {
         private const val TAG = "lenny"
+        private const val BATTERY_PERIOD_MS = 60_000L
         private const val MAX_BITRATE_KBPS = 20000
         private val FALLBACK_MODES = intArrayOf(1280, 720, 30, 1, 1920, 1080, 30, 1)
 

@@ -212,14 +212,14 @@ JNIEXPORT jint JNICALL Java_com_spizganed_android_1camera_LennyNative_updateStre
     return lenny_sender_update_stream(ctx_of(h)->session, &s);
 }
 
-// state = [afMode, exposureComp, exposureLock, wbLock, torch, lensId, zoom]
+// state = [afMode, exposureComp, exposureLock, wbLock, torch, lensId, zoom, battery, charging]
 JNIEXPORT jint JNICALL Java_com_spizganed_android_1camera_LennyNative_sendControlState(JNIEnv* env, jclass, jlong h,
                                                                                       jintArray state) {
-    if (!h || !state || env->GetArrayLength(state) != 7) return LENNY_E_INVALID_ARG;
-    jint v[7];
-    env->GetIntArrayRegion(state, 0, 7, v);
+    if (!h || !state || env->GetArrayLength(state) != 9) return LENNY_E_INVALID_ARG;
+    jint v[9];
+    env->GetIntArrayRegion(state, 0, 9, v);
     lenny_control_state s{uint8_t(v[0]), v[1], uint8_t(v[2]), uint8_t(v[3]), uint8_t(v[4]), uint8_t(v[5]),
-                          uint16_t(v[6])};
+                          uint16_t(v[6]), uint8_t(v[7]), uint8_t(v[8])};
     return lenny_sender_send_control_state(ctx_of(h)->session, &s);
 }
 

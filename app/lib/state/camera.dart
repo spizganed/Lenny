@@ -21,12 +21,16 @@ class CameraControls {
     this.torch = false,
     this.lens = 0,
     this.zoom100 = 100,
+    this.battery,
+    this.charging = false,
   });
 
   final int afMode; // 0 continuous, 1 locked, 2 focusing
   final int exposureEvMilli;
   final bool aeLock, awbLock, torch;
   final int lens, zoom100;
+  final int? battery; // phone battery percent, null if unknown
+  final bool charging;
 
   bool get focusLocked => afMode == 1;
 

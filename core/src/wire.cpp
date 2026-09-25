@@ -529,11 +529,14 @@ void encode(TlvWriter& w, const ControlState& m) {
     w.u8(5, s.torch);
     w.u8(6, s.lens_id);
     w.u16(7, s.zoom);
+    w.u8(8, s.battery);
+    w.u8(9, s.charging);
 }
 
 bool decode(View v, ControlState& m) {
     m = {};
     auto& s = m.s;
+    s.battery = 255;  // older phones don't send it
     return each(v, [&](uint16_t tag, View val) {
         switch (tag) {
             case 1: return get(val, s.af_mode);
@@ -543,6 +546,8 @@ bool decode(View v, ControlState& m) {
             case 5: return get(val, s.torch);
             case 6: return get(val, s.lens_id);
             case 7: return get(val, s.zoom);
+            case 8: return get(val, s.battery);
+            case 9: return get(val, s.charging);
             default: return true;
         }
     });

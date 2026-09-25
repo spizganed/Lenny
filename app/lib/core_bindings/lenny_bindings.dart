@@ -563,7 +563,7 @@ class LennyBindings {
 
 const int LENNY_ABI_VERSION_MAJOR = 1;
 
-const int LENNY_ABI_VERSION_MINOR = 1;
+const int LENNY_ABI_VERSION_MINOR = 2;
 
 const int LENNY_ACK_BUSY = 3;
 
@@ -744,6 +744,12 @@ final class lenny_control_state extends ffi.Struct {
   @ffi.Uint16()
   external int zoom;
 
+  @ffi.Uint8()
+  external int battery;
+
+  @ffi.Uint8()
+  external int charging;
+
   static ffi.Pointer<lenny_control_state> $allocate(
     ffi.Allocator $allocator, {
     required int af_mode,
@@ -753,6 +759,8 @@ final class lenny_control_state extends ffi.Struct {
     required int torch,
     required int lens_id,
     required int zoom,
+    required int battery,
+    required int charging,
   }) => $allocator<lenny_control_state>()
     ..ref.af_mode = af_mode
     ..ref.exposure_comp = exposure_comp
@@ -760,7 +768,9 @@ final class lenny_control_state extends ffi.Struct {
     ..ref.wb_lock = wb_lock
     ..ref.torch = torch
     ..ref.lens_id = lens_id
-    ..ref.zoom = zoom;
+    ..ref.zoom = zoom
+    ..ref.battery = battery
+    ..ref.charging = charging;
 }
 
 enum lenny_event {

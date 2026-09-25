@@ -388,6 +388,15 @@ class ReceiverController extends Notifier<ReceiverState> {
   /// Tap on the preview (normalised to its 16:9 box).
   Future<void> focusAt(double x, double y) => ref.read(receiverServiceProvider).focusAt(x, y);
 
+  /// Header button. Disconnect stops listening, which drops the phone (it keeps retrying in the background);
+  /// Connect listens again and a trusted phone comes straight back.
+  Future<void> disconnect() async {
+    await _stop();
+    state = const ReceiverState(link: LinkState.closed, reason: LENNY_REASON_USER);
+  }
+
+  Future<void> connect() => _start();
+
   Future<void> _pollStats() async {
     final s = _session;
     if (s == null) return;

@@ -228,9 +228,12 @@ TEST(roundtrip_all_messages) {
         CHECK(out.c.cmd == cmd && out.c.req_id == 42 && out.c.value == c.value);
     }
     CHECK(roundtrip(ControlAck{42, LENNY_ACK_FAILED}).result == LENNY_ACK_FAILED);
-    lenny_control_state cs{1, -500, 1, 0, 1, 2, 150};
+    lenny_control_state cs{1, -500, 1, 0, 1, 2, 150, 87, 1};
     auto cs2 = roundtrip(ControlState{cs});
     CHECK(cs2.s.af_mode == 1 && cs2.s.exposure_comp == -500 && cs2.s.torch == 1 && cs2.s.zoom == 150);
+    CHECK(cs2.s.battery == 87 && cs2.s.charging == 1);
+    ControlState old;  // a 1.1 phone sends no battery tag
+    CHECK(decode(View{}, old) && old.s.battery == 255);
 }
 
 TEST(clock_sync_prefers_lowest_rtt) {
