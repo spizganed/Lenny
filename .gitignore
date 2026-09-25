@@ -34,3 +34,6 @@ key.properties
 *.key
 google-services.json
 GoogleService-Info.plist
+
+# Personal scratch space (screenshots, notes): never commit
+local/
