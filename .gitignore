@@ -1,0 +1,36 @@
+build/
+out/
+.dart_tool/
+.idea/
+.vs/
+*.iml
+local.properties
+
+# Local-only debug output: never commit
+*.log
+logs/
+*.dmp
+*.mdmp
+*.etl
+*.pcap
+*.pcapng
+*.h264
+*.hevc
+*.trace
+crash*/
+captures/
+tombstones/
+bugreport*.zip
+
+# Secrets / machine config
+.env
+.env.*
+*.keystore
+*.jks
+key.properties
+*.pfx
+*.p12
+*.pem
+*.key
+google-services.json
+GoogleService-Info.plist
