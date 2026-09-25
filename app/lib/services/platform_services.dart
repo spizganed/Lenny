@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:android_camera/android_camera.dart';
 import 'package:windows_receiver/windows_receiver.dart';
 
@@ -11,14 +13,18 @@ class PermissionDeniedException implements Exception {
 
 /// Phone side. Owns the native pipeline; hands out the control-plane session.
 class SenderService {
-  Future<({CoreSession session, CameraCaps caps})> start(String host, int port) async {
+  /// [token] = pairing token from a QR code: the desktop then skips its approval prompt.
+  Future<({CoreSession session, CameraCaps caps})> start(String host, int port, {Uint8List? token}) async {
     if (!await AndroidCamera.requestPermissions()) throw PermissionDeniedException();
-    final r = await AndroidCamera.start(host: host, port: port);
+    final r = await AndroidCamera.start(host: host, port: port, token: token);
     return (
       session: CoreSession(r.session),
       caps: CameraCaps(controls: r.controls, lenses: r.lenses, exposure: r.exposure),
     );
   }
+
+  /// Raw text of a scanned QR code, null if cancelled.
+  Future<String?> scanQr() => AndroidCamera.scanQr();
 
   /// The phone's own camera buttons. Returns LENNY_ACK_*.
   Future<int> control(CameraCommand c) => AndroidCamera.control(c.cmd, value: c.value);

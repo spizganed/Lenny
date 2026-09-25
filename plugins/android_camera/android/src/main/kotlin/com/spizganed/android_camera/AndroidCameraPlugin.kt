@@ -8,6 +8,9 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -22,6 +25,7 @@ import java.util.concurrent.Executors
  *   start({host, port, token?}) -> {session: lenny_session* for Dart FFI, controls, lenses, exposure}
  *   stop()
  *   control({cmd, x, y, value}) -> int (LENNY_ACK_*): the phone's own camera buttons
+ *   scanQr() -> String? (null = cancelled): Google code scanner, runs in the system UI
  * Native -> Dart: state(map) whenever the camera control state changes.
  */
 class AndroidCameraPlugin :
@@ -81,6 +85,14 @@ class AndroidCameraPlugin :
                     p.control(call.argument<Int>("cmd")!!, call.argument<Int>("x") ?: 0, call.argument<Int>("y") ?: 0,
                         call.argument<Int>("value") ?: 0),
                 )
+            }
+            "scanQr" -> {
+                val act = activity?.activity ?: return result.success(null)
+                val options = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
+                GmsBarcodeScanning.getClient(act, options).startScan()
+                    .addOnSuccessListener { result.success(it.rawValue) }
+                    .addOnCanceledListener { result.success(null) }
+                    .addOnFailureListener { result.error("scan", it.message, null) }
             }
             "stop" -> {
                 stop()

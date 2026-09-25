@@ -85,4 +85,7 @@ class AndroidCamera {
   }
 
   static Future<void> stop() => _channel.invokeMethod('stop');
+
+  /// Scans a QR code with the system scanner. Null if cancelled.
+  static Future<String?> scanQr() => _channel.invokeMethod<String>('scanQr');
 }

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 
@@ -23,7 +24,8 @@ class CoreEvent {
 }
 
 class PeerInfo {
-  const PeerInfo(this.name, this.platform, this.caps);
+  const PeerInfo(this.deviceId, this.name, this.platform, this.caps);
+  final String deviceId; // hex, stable per phone install
   final String name;
   final int platform;
   final CameraCaps caps; // receiver: the phone's camera, from its CAPS
@@ -81,7 +83,9 @@ class CoreSession {
           if (r.lens_ids[i] < lenses.length) lenses[r.lens_ids[i]] = _cString(r.lens_labels[i], 32);
         }
         final hasExposure = r.exposure_step_milli != 0;
+        final id = [for (var i = 0; i < LENNY_DEVICE_ID_SIZE; i++) r.device_id[i].toRadixString(16).padLeft(2, '0')];
         return PeerInfo(
+          id.join(),
           _cString(r.name, 64),
           r.platform,
           CameraCaps(
@@ -148,6 +152,22 @@ class CoreSession {
 
   /// Receiver: answer an approval prompt.
   void approve(bool accept) => core.lenny_receiver_approve(_ptr, accept ? 1 : 0);
+
+  /// Receiver: a fresh single-use pairing token for the QR code; the previous one stops working.
+  Uint8List? newPairToken(Duration ttl) => using((arena) {
+        final out = arena<Uint8>(LENNY_PAIR_TOKEN_SIZE);
+        if (core.lenny_receiver_new_pair_token(_ptr, ttl.inMilliseconds, out) != LENNY_OK) return null;
+        return Uint8List.fromList(out.asTypedList(LENNY_PAIR_TOKEN_SIZE));
+      });
+
+  /// Receiver: a phone approved earlier (hex [PeerInfo.deviceId]) connects without asking.
+  void trustDevice(String hexId) => using((arena) {
+        final id = arena<Uint8>(LENNY_DEVICE_ID_SIZE);
+        for (var i = 0; i < LENNY_DEVICE_ID_SIZE; i++) {
+          id[i] = int.parse(hexId.substring(2 * i, 2 * i + 2), radix: 16);
+        }
+        core.lenny_receiver_trust_device(_ptr, id);
+      });
 
   /// Must run before the native side destroys the session. Afterwards this object is dead.
   void detach() {
