@@ -106,7 +106,7 @@ private:
     // Current link. Written by the I/O thread; read by senders on other threads.
     std::mutex link_mu_;
     std::shared_ptr<ITransport> link_;
-    std::timed_mutex send_mu_;  // serializes whole messages on the socket
+    std::mutex send_mu_;  // serializes whole messages on the socket
     std::atomic<bool> streaming_{false};
     std::atomic<uint8_t> minor_{wire::kVersionMinor};  // negotiated; read by sender threads
 

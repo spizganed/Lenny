@@ -390,9 +390,14 @@ int32_t Session::goodbye(int32_t reason) {
         t = link_;
     }
     // Best effort: if another thread is stuck mid-send, don't wait on it just to say goodbye.
-    if (t && send_mu_.try_lock_for(std::chrono::milliseconds(200))) {
-        t->send_all(bytes.data(), bytes.size());
-        send_mu_.unlock();
+    // (Polling try_lock, not timed_mutex: glibc's timed lock is invisible to TSan and trips false positives.)
+    for (int i = 0; t && i < 20; ++i) {
+        if (send_mu_.try_lock()) {
+            t->send_all(bytes.data(), bytes.size());
+            send_mu_.unlock();
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     return reason;
 }
