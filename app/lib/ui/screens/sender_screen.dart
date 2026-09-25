@@ -2,15 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../brand.dart';
+import '../../services/core_session.dart';
+import '../../services/pc_link.dart';
 import '../../state/providers.dart';
 import '../../state/status_text.dart';
-import '../../services/core_session.dart';
+import '../../theme/lenny_tokens.dart';
 import '../components/camera_controls.dart';
-import '../components/mascot_slot.dart';
-import '../components/status_line.dart';
+import '../components/sticker.dart';
 
-/// Phone home screen. ponytail: plain connect form. The ConnectionControl pill + drawer, QR scan and on-phone
-/// preview arrive in later milestones (preview M3, control + QR M5/M6).
+/// Phone home (design.md §6): status hero → connection card → camera card. Single column.
 class SenderScreen extends ConsumerStatefulWidget {
   const SenderScreen({super.key});
 
@@ -48,76 +48,152 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
     ref.read(senderProvider.notifier).connect(_host.text.trim(), port);
   }
 
+  void _connectTo(PcLink pc) {
+    _host.text = pc.hosts.first;
+    _port.text = '${pc.port}';
+    ref.read(senderProvider.notifier).connect(pc.hosts.first, pc.port);
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = ref.watch(senderProvider);
+    final ctl = ref.read(senderProvider.notifier);
+    final streaming = s.link == LinkState.streaming;
     return Scaffold(
-      appBar: AppBar(title: const Text(Brand.appName)),
-      body: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: ListView(padding: const EdgeInsets.all(16), children: [
-              const Center(child: MascotSlot()),
-              const SizedBox(height: 16),
-              Center(child: StatusLine(link: s.link, text: s.error ?? statusText(s.link, s.reason, sender: true))),
-              const SizedBox(height: 24),
-              TextField(
-                controller: _host,
-                enabled: !s.active,
-                keyboardType: TextInputType.url,
-                textInputAction: TextInputAction.next,
-                decoration: const InputDecoration(labelText: 'PC address', hintText: 'e.g. 192.168.1.20'),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _port,
-                enabled: !s.active,
-                keyboardType: TextInputType.number,
-                textInputAction: TextInputAction.go,
-                onSubmitted: (_) => _connect(),
-                decoration: const InputDecoration(labelText: 'Port'),
-              ),
-              const SizedBox(height: 20),
-              s.active
-                  ? OutlinedButton(
-                      onPressed: () => ref.read(senderProvider.notifier).disconnect(),
-                      child: const Text('Disconnect'),
-                    )
-                  : FilledButton(onPressed: _connect, child: const Text('Connect')),
-              if (!s.active) ...[
-                const SizedBox(height: 12),
-                OutlinedButton.icon(
-                  onPressed: ref.read(senderProvider.notifier).scanAndConnect,
-                  icon: const Icon(Icons.qr_code_scanner),
-                  label: const Text('Scan QR code'),
-                ),
-                const SizedBox(height: 12),
-                OutlinedButton.icon(
-                  onPressed: s.searching ? null : ref.read(senderProvider.notifier).findPcs,
-                  icon: const Icon(Icons.wifi_find),
-                  label: Text(s.searching ? 'Searching…' : 'Find PCs on this Wi-Fi'),
-                ),
-                for (final pc in s.found)
-                  ListTile(
-                    leading: const Icon(Icons.computer),
-                    title: Text(pc.name.isEmpty ? pc.hosts.first : pc.name),
-                    subtitle: Text('${pc.hosts.first}:${pc.port}'),
-                    onTap: () => ref.read(senderProvider.notifier).connect(pc.hosts.first, pc.port),
+      body: DotBackground(
+        spacing: 22,
+        child: SafeArea(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 480),
+              child: ListView(padding: const EdgeInsets.all(20), children: [
+                Text(Brand.appName, style: LennyTokens.wordmark(38)),
+                const SizedBox(height: 20),
+                _StatusHero(state: s),
+                const SizedBox(height: 16),
+                StickerCard(label: 'Connection', children: [
+                  StickerField(
+                    label: 'PC address',
+                    controller: _host,
+                    enabled: !s.active,
+                    hint: '192.168.x.x',
+                    keyboardType: TextInputType.url,
+                    textInputAction: TextInputAction.next,
                   ),
-              ],
-              if (s.link == LinkState.streaming) ...[
-                const SizedBox(height: 24),
-                CameraControlsBar(
-                  caps: s.caps,
-                  controls: s.controls,
-                  onCommand: ref.read(senderProvider.notifier).command,
-                ),
-              ],
-            ]),
+                  StickerField(
+                    label: 'Port',
+                    controller: _port,
+                    enabled: !s.active,
+                    keyboardType: TextInputType.number,
+                    textInputAction: TextInputAction.go,
+                    onSubmitted: (_) => _connect(),
+                  ),
+                  s.active
+                      ? StickerButton(label: 'Disconnect', kind: ButtonKind.destructive, onPressed: ctl.disconnect)
+                      : StickerButton(label: 'Connect', kind: ButtonKind.primary, onPressed: _connect),
+                  if (!s.active) ...[
+                    Row(children: [
+                      Expanded(
+                        child: StickerButton(
+                          label: 'Scan QR',
+                          icon: Icons.qr_code_scanner_rounded,
+                          onPressed: ctl.scanAndConnect,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: StickerButton(
+                          label: s.searching ? 'Searching…' : 'Find PCs',
+                          icon: Icons.wifi_find_rounded,
+                          onPressed: s.searching ? null : ctl.findPcs,
+                        ),
+                      ),
+                    ]),
+                    if (s.found case final found?)
+                      if (found.isEmpty)
+                        Text(
+                          'No Lenny Desktop answered. Is it open and on the same Wi-Fi?',
+                          style: LennyTokens.body(color: LennyTokens.textMuted),
+                        )
+                      else
+                        for (final pc in found) _FoundPc(pc: pc, onTap: () => _connectTo(pc)),
+                  ],
+                ]),
+                if (streaming) ...[
+                  const SizedBox(height: 16),
+                  StickerCard(label: 'Camera', children: [
+                    if (s.caps.hasLenses) LensPicker(caps: s.caps, controls: s.controls, onCommand: ctl.command),
+                    FocusButtons(caps: s.caps, controls: s.controls, onCommand: ctl.command),
+                    if (s.caps.hasTorch) TorchRow(controls: s.controls, onCommand: ctl.command),
+                    if (s.caps.hasExposure)
+                      ExposureSlider(caps: s.caps, controls: s.controls, onCommand: ctl.command, title: 'Exposure'),
+                  ]),
+                ],
+              ]),
+            ),
           ),
         ),
       ),
+    );
+  }
+}
+
+class _StatusHero extends StatelessWidget {
+  const _StatusHero({required this.state});
+  final SenderState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = state;
+    final sub = s.error ??
+        (s.link == LinkState.streaming && s.lastHost != null ? 'to ${s.lastHost} · port ${s.lastPort}' : null);
+    return Sticker(
+      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 20),
+      child: Semantics(
+        liveRegion: true,
+        child: Row(children: [
+          StatusDot(color: linkColor(s.link, error: s.error != null), size: 28),
+          const SizedBox(width: 18),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(statusText(s.link, s.reason, sender: true), style: LennyTokens.heading(26)),
+              if (sub != null) ...[
+                const SizedBox(height: 4),
+                // Errors are sentences; the address is a technical value.
+                Text(sub, style: s.error != null ? LennyTokens.body() : LennyTokens.mono(size: 14, color: LennyTokens.textMuted)),
+              ],
+            ]),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+class _FoundPc extends StatelessWidget {
+  const _FoundPc({required this.pc, required this.onTap});
+  final PcLink pc;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final name = pc.name.isEmpty ? pc.hosts.first : pc.name;
+    return PressableSticker(
+      onPressed: onTap,
+      semanticLabel: 'Connect to $name',
+      height: 64,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Row(children: [
+        const Icon(Icons.computer_rounded, size: 22, color: LennyTokens.text),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(name, style: LennyTokens.button(), overflow: TextOverflow.ellipsis),
+            Text('${pc.hosts.first}:${pc.port}', style: LennyTokens.mono(size: 13, color: LennyTokens.textMuted)),
+          ]),
+        ),
+        const Icon(Icons.chevron_right_rounded, color: LennyTokens.textMuted),
+      ]),
     );
   }
 }

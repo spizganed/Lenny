@@ -26,7 +26,7 @@ class SenderState {
     this.controls = const CameraControls(),
     this.lastHost,
     this.lastPort,
-    this.found = const [],
+    this.found,
     this.searching = false,
   });
 
@@ -35,9 +35,9 @@ class SenderState {
   final String? error;
   final CameraCaps caps;
   final CameraControls controls;
-  final String? lastHost; // the last PC that streamed, to prefill the form
+  final String? lastHost; // the PC that streamed last (or now), to prefill the form
   final int? lastPort;
-  final List<PcLink> found; // Lenny Desktops on this network, from [SenderController.findPcs]
+  final List<PcLink>? found; // Lenny Desktops on this network, from [SenderController.findPcs]; null = not searched
   final bool searching;
 
   bool get active => link != LinkState.idle && link != LinkState.closed;
@@ -121,6 +121,7 @@ class SenderController extends Notifier<SenderState> {
     final t = _target;
     if (link != LinkState.streaming || t == null) return;
     // Remember only a PC that actually streamed, so a typo never overwrites a good address.
+    state = state.copyWith(lastHost: t.host, lastPort: t.port);
     SharedPreferences.getInstance().then((p) => p
       ..setString(_hostKey, t.host)
       ..setInt(_portKey, t.port));

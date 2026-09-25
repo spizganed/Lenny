@@ -17,8 +17,10 @@ Test vectors live in `/protocol/vectors/` (added in M1). This file is the spec.
   `adb reverse`, USB tethering).
 - `TCP_NODELAY` on both ends. The sender's socket send buffer is kept small (~256 KiB) so backpressure
   shows up quickly (see §9).
-- mDNS/DNS-SD: receiver advertises `_lenny._tcp.local.` with TXT `v=1`, `id=<device id>`, `n=<name>`.
-  Sender may advertise `_lenny-sender._tcp.local.` (TXT `v=1`, `id`, `n`), used for display only.
+- Discovery, **47474/UDP**: the sender sends the ASCII probe `LENNY?1` (broadcast, or unicast to the
+  hosts from a QR code). A receiver answers to the probe's source with `lenny://c?v=1&p=<tcp port>&n=<name>`
+  (the §6.4 link without `h` and `t`); the answer's source address is the host. Anything else on the
+  port is ignored.
 
 ## 3. Framing
 

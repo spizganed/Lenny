@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'brand.dart';
-import 'theme/lenny_colors.dart';
+import 'theme/lenny_tokens.dart';
 import 'ui/screens/receiver_screen.dart';
 import 'ui/screens/sender_screen.dart';
 

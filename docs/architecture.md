@@ -129,7 +129,7 @@ because they wrap OS APIs). Core only sees bytes and timestamps.
 | `IEncoder` | MediaCodec H.264 | — | VideoToolbox |
 | `IDecoder` | — | Media Foundation H.264 → NV12 | VideoToolbox, VA-API/FFmpeg |
 | `IVirtualCamera` | — | DirectShow filter, MF vcam | v4l2loopback |
-| `IDiscovery` | NsdManager (advertise) | `DnsServiceBrowse` (browse) | Bonjour, Avahi |
+| Discovery | UDP probe (Dart, `discovery.dart`) | UDP responder (Dart) | same Dart code |
 
 On Android these are Kotlin interfaces (same shape). The "interface" is the contract
 documented here, not a shared C++ header, because Kotlin can't implement a C++ class.
@@ -144,7 +144,7 @@ documented here, not a shared C++ header, because Kotlin can't implement a C++ c
 
 ```
 Receiver listens on TCP 47474 (default) and advertises _lenny._tcp.
-Sender connects (manual IP, mDNS result, QR payload, adb-forwarded localhost, or tethering IP).
+Sender connects (manual IP, discovery result, QR payload, adb-forwarded localhost, or tethering IP).
 
 SENDER                                  RECEIVER
   HELLO(proto ver, role, device info) ──►
@@ -275,12 +275,18 @@ to the format the consumer picked, so the receiver app writes one frame at one s
   "Lenny" and the DirectShow one "Lenny (Classic)" on Win11. Revisit after M5 testing.
 
 ### 7.5 Discovery and USB helpers
-- mDNS: the receiver **advertises** `_lenny._tcp` via `DnsServiceRegister` (Win10 1809+), and the sender
-  **browses** with NsdManager. The desktop device list shows phones that are *connected or connecting*,
-  plus phones seen via ADB (`adb devices`). *Deviation from the prompt:* the prompt has the phone
-  being discovered by the desktop. Since the phone connects to the PC (§5), the PC is the one
-  advertised. The sender also advertises `_lenny-sender._tcp` so the desktop list can show nearby
-  idle phones. It's cheap, so both directions are in.
+- LAN discovery (replaces the earlier mDNS plan): the phone broadcasts the UDP probe `LENNY?1` to port
+  47474, and every Lenny Desktop answers with a `lenny://` link without host or token (protocol.md §2).
+  The answer's source address is the host. Pure Dart (`app/lib/services/discovery.dart`), the same on
+  every platform, no native mDNS APIs. Limit: IPv4 broadcast reaches only the local subnet; mDNS stays
+  the upgrade if multi-subnet setups matter.
+- QR pairing: the desktop shows a `lenny://` link listing all its IPv4 addresses, the port and a
+  single-use token (90 s, renewed every 80 s and after each pairing). The phone probes the listed
+  addresses with the same UDP probe, connects to the first that answers, and the token skips the
+  approval prompt (protocol.md §6.4).
+- Trusted phones: a phone that streamed once is saved by device id (shared_preferences) and passed to
+  `lenny_receiver_trust_device` at start, so it reconnects without a prompt. The phone saves the last
+  PC that streamed and prefills the form.
 - ADB: bundled `adb.exe` (platform-tools, Apache 2.0) under the install dir. The receiver polls
   `adb devices` every 2 s, and for each authorized device runs `adb reverse tcp:47474 tcp:47474`
   and tells the phone app to connect to localhost via `adb shell am broadcast`, or the phone

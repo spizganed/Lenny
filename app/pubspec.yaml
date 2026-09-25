@@ -17,6 +17,7 @@ dependencies:
     path: ../plugins/windows_receiver
   shared_preferences: ^2.5.5
   qr_flutter: ^4.1.0
+  google_fonts: ^8.2.1
 
 dev_dependencies:
   flutter_test:
