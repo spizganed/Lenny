@@ -14,6 +14,8 @@ namespace windows_receiver {
 
 // Channel "lenny/windows_receiver":
 //   start({port}) -> {session: int (lenny_session* for Dart FFI), port: int, textureId: int}
+//   focusAt({x, y}) -> bool: tap on the preview, normalised 0..1; true if it hit the picture
+//   displayLatencyMs() -> double: capture -> preview, smoothed; -1 if unknown
 //   stop()
 class WindowsReceiverPlugin : public flutter::Plugin {
  public:

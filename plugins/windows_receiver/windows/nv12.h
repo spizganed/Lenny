@@ -19,18 +19,35 @@ struct Nv12View {
 
 inline uint8_t clamp8(int v) { return static_cast<uint8_t>(std::clamp(v, 0, 255)); }
 
-// rotation = quarter turns clockwise to upright (protocol.md §6.8). `out` must be out_w * out_h * 4 bytes.
-inline void nv12_to_rgba(const Nv12View& src, int rotation, uint8_t* out, int out_w, int out_h) {
-    const int W = src.width, H = src.height;
-    const bool swap = rotation & 1;
-    const int rw = swap ? H : W, rh = swap ? W : H;  // upright size
-    // Fit rw x rh into the canvas, centred.
+// Where an upright rw x rh picture lands inside an out_w x out_h canvas (centred, aspect kept).
+struct Fit {
+    int x0, y0, dw, dh;
+};
+inline Fit fit(int rw, int rh, int out_w, int out_h) {
     int dw = out_w, dh = int(int64_t(rh) * out_w / rw);
     if (dh > out_h) {
         dh = out_h;
         dw = int(int64_t(rw) * out_h / rh);
     }
-    const int x0 = (out_w - dw) / 2, y0 = (out_h - dh) / 2;
+    return {(out_w - dw) / 2, (out_h - dh) / 2, dw, dh};
+}
+
+// Canvas point (normalised 0..1) -> upright picture point (0..1). False if it's on a letterbox bar.
+inline bool canvas_to_upright(double cx, double cy, int width, int height, int rotation, int out_w, int out_h,
+                              double& u, double& v) {
+    const bool swap = rotation & 1;
+    const Fit f = fit(swap ? height : width, swap ? width : height, out_w, out_h);
+    u = (cx * out_w - f.x0) / f.dw;
+    v = (cy * out_h - f.y0) / f.dh;
+    return u >= 0 && u <= 1 && v >= 0 && v <= 1;
+}
+
+// rotation = quarter turns clockwise to upright (protocol.md §6.8). `out` must be out_w * out_h * 4 bytes.
+inline void nv12_to_rgba(const Nv12View& src, int rotation, uint8_t* out, int out_w, int out_h) {
+    const int W = src.width, H = src.height;
+    const bool swap = rotation & 1;
+    const int rw = swap ? H : W, rh = swap ? W : H;  // upright size
+    const auto [x0, y0, dw, dh] = fit(rw, rh, out_w, out_h);
     uint8_t* d = out;
     for (int oy = 0; oy < out_h; ++oy) {
         for (int ox = 0; ox < out_w; ++ox, d += 4) {

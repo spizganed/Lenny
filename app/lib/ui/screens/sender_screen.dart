@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../brand.dart';
 import '../../state/providers.dart';
 import '../../state/status_text.dart';
+import '../../services/core_session.dart';
+import '../components/camera_controls.dart';
 import '../components/mascot_slot.dart';
 import '../components/status_line.dart';
 
@@ -70,6 +72,14 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
                       child: const Text('Disconnect'),
                     )
                   : FilledButton(onPressed: _connect, child: const Text('Connect')),
+              if (s.link == LinkState.streaming) ...[
+                const SizedBox(height: 24),
+                CameraControlsBar(
+                  caps: s.caps,
+                  controls: s.controls,
+                  onCommand: ref.read(senderProvider.notifier).command,
+                ),
+              ],
             ]),
           ),
         ),

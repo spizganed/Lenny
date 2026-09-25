@@ -6,6 +6,7 @@ import '../../services/core_session.dart';
 import '../../state/providers.dart';
 import '../../state/status_text.dart';
 import '../../theme/lenny_colors.dart';
+import '../components/camera_controls.dart';
 import '../components/mascot_slot.dart';
 import '../components/status_line.dart';
 
@@ -50,7 +51,17 @@ class ReceiverScreen extends ConsumerWidget {
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(15),
                       child: streaming && s.textureId != null
-                          ? Texture(textureId: s.textureId!)
+                          // Tap to focus there. The native side maps the tap through letterbox + rotation.
+                          ? LayoutBuilder(
+                              builder: (context, box) => GestureDetector(
+                                onTapUp: (d) => ref.read(receiverProvider.notifier).focusAt(
+                                    d.localPosition.dx / box.maxWidth, d.localPosition.dy / box.maxHeight),
+                                child: MouseRegion(
+                                  cursor: SystemMouseCursors.precise,
+                                  child: Texture(textureId: s.textureId!),
+                                ),
+                              ),
+                            )
                           : Center(child: Text(streaming ? 'Waiting for video…' : 'No phone connected')),
                     ),
                   ),
@@ -58,12 +69,21 @@ class ReceiverScreen extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 12),
+            if (streaming)
+              CameraControlsBar(
+                caps: s.caps,
+                controls: s.controls,
+                onCommand: ref.read(receiverProvider.notifier).command,
+              ),
+            const SizedBox(height: 8),
             Text(
               streaming
                   ? [
                       if (s.stream != null) '${s.stream!.width}×${s.stream!.height}',
                       '${s.fps.toStringAsFixed(0)} fps',
                       '${s.kbps} kbps',
+                      if (s.displayLatencyMs != null) 'latency ${s.displayLatencyMs!.toStringAsFixed(0)} ms',
+                      if (s.networkLatencyMs != null) '(network ${s.networkLatencyMs!.toStringAsFixed(0)} ms)',
                       if (s.rttMs != null) 'RTT ${s.rttMs!.toStringAsFixed(1)} ms',
                     ].join('   ·   ')
                   : ' ',

@@ -43,6 +43,7 @@ struct Ctx {
     jobject listener = nullptr;  // global ref to SenderListener
     jmethodID on_stream_config = nullptr;
     jmethodID on_control = nullptr;
+    jmethodID on_bitrate = nullptr;
 };
 
 void on_stream_config(void* user, const lenny_stream_settings* req, lenny_stream_settings* eff) {
@@ -70,6 +71,14 @@ int32_t on_control(void* user, const lenny_control* c) {
     return clear_exception(env, "onControl") ? LENNY_ACK_FAILED : r;
 }
 
+void on_bitrate(void* user, uint32_t kbps) {
+    auto* ctx = static_cast<Ctx*>(user);
+    JNIEnv* env = env_for_thread();
+    if (!env) return;
+    env->CallVoidMethod(ctx->listener, ctx->on_bitrate, jint(kbps));
+    clear_exception(env, "onBitrate");
+}
+
 Ctx* ctx_of(jlong h) { return reinterpret_cast<Ctx*>(h); }
 
 const uint8_t* direct(JNIEnv* env, jobject buf, jint offset) {
@@ -86,16 +95,19 @@ JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void*) {
     return JNI_VERSION_1_6;
 }
 
-JNIEXPORT jlong JNICALL Java_com_spizganed_android_1camera_LennyNative_create(JNIEnv* env, jclass, jbyteArray device_id,
-                                                                             jstring name, jintArray modes,
-                                                                             jint max_bitrate, jint controls,
-                                                                             jobject listener) {
-    if (!device_id || env->GetArrayLength(device_id) != LENNY_DEVICE_ID_SIZE || !name || !modes || !listener) return 0;
+// lenses = flat [id, facing, ...] with labels[i] for each; exposure = [min, max, step_milli] (EV*1000) or empty.
+JNIEXPORT jlong JNICALL Java_com_spizganed_android_1camera_LennyNative_create(
+    JNIEnv* env, jclass, jbyteArray device_id, jstring name, jintArray modes, jint max_bitrate, jint controls,
+    jintArray lenses, jobjectArray lens_labels, jintArray exposure, jobject listener) {
+    if (!device_id || env->GetArrayLength(device_id) != LENNY_DEVICE_ID_SIZE || !name || !modes || !listener ||
+        !lenses || !lens_labels || !exposure)
+        return 0;
     auto* ctx = new Ctx;
     jclass cls = env->GetObjectClass(listener);
     ctx->on_stream_config = env->GetMethodID(cls, "onStreamConfig", "(IIIII)[I");
     ctx->on_control = env->GetMethodID(cls, "onControl", "(IIII)I");
-    if (!ctx->on_stream_config || !ctx->on_control) {
+    ctx->on_bitrate = env->GetMethodID(cls, "onBitrate", "(I)V");
+    if (!ctx->on_stream_config || !ctx->on_control || !ctx->on_bitrate) {
         clear_exception(env, "create");
         delete ctx;
         return 0;
@@ -118,12 +130,40 @@ JNIEXPORT jlong JNICALL Java_com_spizganed_android_1camera_LennyNative_create(JN
     cfg.max_bitrate_kbps = uint32_t(max_bitrate);
     cfg.controls = uint32_t(controls);
 
+    // Lens labels: keep the UTF-8 copies alive until lenny_sender_create has copied them.
+    std::vector<lenny_lens> lens_list;
+    std::vector<std::pair<jstring, const char*>> label_refs;
+    const jsize nl = env->GetArrayLength(lenses) / 2;
+    jint* lv = env->GetIntArrayElements(lenses, nullptr);
+    for (jsize i = 0; i < nl && i < env->GetArrayLength(lens_labels); ++i) {
+        auto js = static_cast<jstring>(env->GetObjectArrayElement(lens_labels, i));
+        const char* label = js ? env->GetStringUTFChars(js, nullptr) : "";
+        label_refs.emplace_back(js, label);
+        lens_list.push_back({uint8_t(lv[2 * i]), uint8_t(lv[2 * i + 1]), label});
+    }
+    env->ReleaseIntArrayElements(lenses, lv, JNI_ABORT);
+    cfg.lenses = lens_list.data();
+    cfg.lens_count = lens_list.size();
+    if (env->GetArrayLength(exposure) == 3) {
+        jint ev[3];
+        env->GetIntArrayRegion(exposure, 0, 3, ev);
+        cfg.exposure_comp_min = ev[0];
+        cfg.exposure_comp_max = ev[1];
+        cfg.exposure_comp_step_milli = uint32_t(ev[2]);
+    }
+
     lenny_sender_callbacks cb{};
     cb.user = ctx;
     cb.on_stream_config = on_stream_config;
     cb.on_control = on_control;
+    cb.on_bitrate = on_bitrate;
     ctx->session = lenny_sender_create(&cfg, &cb);  // copies everything it needs
     env->ReleaseStringUTFChars(name, cname);
+    for (auto& [js, label] : label_refs) {
+        if (!js) continue;
+        env->ReleaseStringUTFChars(js, label);
+        env->DeleteLocalRef(js);
+    }
     if (!ctx->session) {
         env->DeleteGlobalRef(ctx->listener);
         delete ctx;
@@ -161,6 +201,26 @@ JNIEXPORT jint JNICALL Java_com_spizganed_android_1camera_LennyNative_sendFrame(
     return p ? lenny_sender_send_video_frame(ctx_of(h)->session, p, size_t(size), pts_us, uint8_t(orientation),
                                              uint8_t(flags))
              : LENNY_E_INVALID_ARG;
+}
+
+JNIEXPORT jint JNICALL Java_com_spizganed_android_1camera_LennyNative_updateStream(JNIEnv*, jclass, jlong h, jint w,
+                                                                                  jint height, jint fps,
+                                                                                  jint bitrate) {
+    if (!h) return LENNY_E_INVALID_ARG;
+    lenny_stream_settings s{LENNY_CODEC_H264, {uint16_t(w), uint16_t(height), uint16_t(fps), 1}, uint32_t(bitrate), 0,
+                            0};
+    return lenny_sender_update_stream(ctx_of(h)->session, &s);
+}
+
+// state = [afMode, exposureComp, exposureLock, wbLock, torch, lensId, zoom]
+JNIEXPORT jint JNICALL Java_com_spizganed_android_1camera_LennyNative_sendControlState(JNIEnv* env, jclass, jlong h,
+                                                                                      jintArray state) {
+    if (!h || !state || env->GetArrayLength(state) != 7) return LENNY_E_INVALID_ARG;
+    jint v[7];
+    env->GetIntArrayRegion(state, 0, 7, v);
+    lenny_control_state s{uint8_t(v[0]), v[1], uint8_t(v[2]), uint8_t(v[3]), uint8_t(v[4]), uint8_t(v[5]),
+                          uint16_t(v[6])};
+    return lenny_sender_send_control_state(ctx_of(h)->session, &s);
 }
 
 JNIEXPORT jint JNICALL Java_com_spizganed_android_1camera_LennyNative_disconnect(JNIEnv*, jclass, jlong h) {

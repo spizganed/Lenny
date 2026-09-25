@@ -230,6 +230,10 @@ TEST(ui_events_carry_ints_and_getters_have_details) {
     CHECK(wait_for([&] { return ev.approval == 1; }));
     CHECK(lenny_session_peer(rx, &peer) == LENNY_OK);
     CHECK(std::strcmp(peer.name, "Pixel") == 0 && peer.platform == LENNY_PLATFORM_ANDROID && peer.device_id[0] == 0x11);
+    // The phone's camera capabilities, for the desktop's remote controls.
+    CHECK((peer.controls & LENNY_CAP_TORCH) && (peer.controls & LENNY_CAP_FOCUS));
+    CHECK(peer.lens_count == 2 && std::strcmp(peer.lens_labels[1], "Front") == 0 && peer.lens_facing[1] == 1);
+    CHECK(peer.exposure_min == -2000 && peer.exposure_max == 2000 && peer.exposure_step_milli == 333);
     lenny_receiver_approve(rx, 1);
     CHECK(wait_for([&] { return ev.start == 1 && ev.streaming == 1; }));
     lenny_stream_settings st{};

@@ -29,6 +29,11 @@ int main() {
 
     nv12_to_rgba(v, 2, out.data(), 4, 2);  // 180: left/right swapped
     assert(out[0] == 0 && out[3 * 4] == 255);
+    // Tap mapping: 1920x1080 portrait phone (rotation 1) in a 960x540 canvas -> picture is 304 px wide, centred.
+    double tu = 0, tv = 0;
+    assert(canvas_to_upright(0.5, 0.5, 1920, 1080, 1, 960, 540, tu, tv) && tu > 0.49 && tu < 0.51 && tv > 0.49 && tv < 0.51);
+    assert(!canvas_to_upright(0.05, 0.5, 1920, 1080, 1, 960, 540, tu, tv));  // left letterbox bar
+    assert(canvas_to_upright(0.25, 0.75, 1920, 1080, 0, 960, 540, tu, tv) && tu > 0.24 && tu < 0.26 && tv > 0.74 && tv < 0.76);
     std::puts("nv12_test ok");
     return 0;
 }

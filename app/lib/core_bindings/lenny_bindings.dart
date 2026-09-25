@@ -333,6 +333,30 @@ class LennyBindings {
         )
       >();
 
+  int lenny_sender_update_stream(
+    ffi.Pointer<lenny_session> s,
+    ffi.Pointer<lenny_stream_settings> effective,
+  ) {
+    return _lenny_sender_update_stream(s, effective);
+  }
+
+  late final _lenny_sender_update_streamPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<lenny_session>,
+            ffi.Pointer<lenny_stream_settings>,
+          )
+        >
+      >('lenny_sender_update_stream');
+  late final _lenny_sender_update_stream = _lenny_sender_update_streamPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<lenny_session>,
+          ffi.Pointer<lenny_stream_settings>,
+        )
+      >();
+
   int lenny_session_control_state(
     ffi.Pointer<lenny_session> s,
     ffi.Pointer<lenny_control_state> out,
@@ -558,6 +582,8 @@ const int LENNY_E_STATE = -2;
 const int LENNY_FRAME_KEYFRAME = 1;
 
 const int LENNY_FRAME_MIRROR = 2;
+
+const int LENNY_MAX_PEER_LENSES = 8;
 
 const int LENNY_OK = 0;
 
@@ -800,6 +826,30 @@ final class lenny_peer_info extends ffi.Struct {
 
   @ffi.Uint8()
   external int platform;
+
+  @ffi.Uint32()
+  external int controls;
+
+  @ffi.Uint8()
+  external int lens_count;
+
+  @ffi.Array.multi([8])
+  external ffi.Array<ffi.Uint8> lens_ids;
+
+  @ffi.Array.multi([8])
+  external ffi.Array<ffi.Uint8> lens_facing;
+
+  @ffi.Array.multi([8, 32])
+  external ffi.Array<ffi.Array<ffi.Char>> lens_labels;
+
+  @ffi.Int32()
+  external int exposure_min;
+
+  @ffi.Int32()
+  external int exposure_max;
+
+  @ffi.Uint32()
+  external int exposure_step_milli;
 }
 
 final class lenny_receiver_callbacks extends ffi.Struct {
@@ -1026,6 +1076,13 @@ final class lenny_sender_callbacks extends ffi.Struct {
   >
   on_control;
 
+  external ffi.Pointer<
+    ffi.NativeFunction<
+      ffi.Void Function(ffi.Pointer<ffi.Void> user, ffi.Uint32 kbps)
+    >
+  >
+  on_bitrate;
+
   static ffi.Pointer<lenny_sender_callbacks> $allocate(
     ffi.Allocator $allocator, {
     required ffi.Pointer<ffi.Void> user,
@@ -1058,11 +1115,18 @@ final class lenny_sender_callbacks extends ffi.Struct {
       >
     >
     on_control,
+    required ffi.Pointer<
+      ffi.NativeFunction<
+        ffi.Void Function(ffi.Pointer<ffi.Void> user, ffi.Uint32 kbps)
+      >
+    >
+    on_bitrate,
   }) => $allocator<lenny_sender_callbacks>()
     ..ref.user = user
     ..ref.on_state = on_state
     ..ref.on_stream_config = on_stream_config
-    ..ref.on_control = on_control;
+    ..ref.on_control = on_control
+    ..ref.on_bitrate = on_bitrate;
 }
 
 final class lenny_sender_config extends ffi.Struct {
@@ -1139,6 +1203,15 @@ final class lenny_stats extends ffi.Struct {
   @ffi.Uint32()
   external int reconnects;
 
+  @ffi.Int64()
+  external int latency_us;
+
+  @ffi.Uint32()
+  external int dropped_frames;
+
+  @ffi.Uint32()
+  external int bitrate_kbps;
+
   static ffi.Pointer<lenny_stats> $allocate(
     ffi.Allocator $allocator, {
     required int rtt_us,
@@ -1147,13 +1220,19 @@ final class lenny_stats extends ffi.Struct {
     required int bytes,
     required int bad_messages,
     required int reconnects,
+    required int latency_us,
+    required int dropped_frames,
+    required int bitrate_kbps,
   }) => $allocator<lenny_stats>()
     ..ref.rtt_us = rtt_us
     ..ref.clock_offset_us = clock_offset_us
     ..ref.frames = frames
     ..ref.bytes = bytes
     ..ref.bad_messages = bad_messages
-    ..ref.reconnects = reconnects;
+    ..ref.reconnects = reconnects
+    ..ref.latency_us = latency_us
+    ..ref.dropped_frames = dropped_frames
+    ..ref.bitrate_kbps = bitrate_kbps;
 }
 
 final class lenny_stream_settings extends ffi.Struct {

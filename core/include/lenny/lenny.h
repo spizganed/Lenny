@@ -282,10 +282,20 @@ typedef enum {
     LENNY_EVENT_CONTROL_ACK = 6        /* receiver; a = req_id, b = LENNY_ACK_* */
 } lenny_event;
 
+#define LENNY_MAX_PEER_LENSES 8
+
 typedef struct {
     uint8_t device_id[LENNY_DEVICE_ID_SIZE];
     char name[64];     /* UTF-8, NUL-terminated, truncated */
     uint8_t platform;  /* LENNY_PLATFORM_*, 0 if unknown */
+    /* Receiver only, from the phone's CAPS (zero until it arrives): what the remote camera controls can do. */
+    uint32_t controls;                                   /* LENNY_CAP_* */
+    uint8_t lens_count;                                  /* <= LENNY_MAX_PEER_LENSES */
+    uint8_t lens_ids[LENNY_MAX_PEER_LENSES];
+    uint8_t lens_facing[LENNY_MAX_PEER_LENSES];          /* 0 back, 1 front, 2 external */
+    char lens_labels[LENNY_MAX_PEER_LENSES][32];         /* UTF-8, NUL-terminated, truncated */
+    int32_t exposure_min, exposure_max;                  /* EV*1000; both 0 = no exposure compensation */
+    uint32_t exposure_step_milli;
 } lenny_peer_info;
 
 LENNY_API int32_t lenny_session_set_event_listener(lenny_session* s, void (*fn)(void* user, int32_t event, int32_t a,

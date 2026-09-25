@@ -12,5 +12,15 @@ class WindowsReceiver {
     return (session: r['session']! as int, port: r['port']! as int, textureId: r['textureId']! as int);
   }
 
+  /// Tap on the preview at (x, y) normalised to its 16:9 box. The native side knows the letterbox and rotation.
+  static Future<bool> focusAt(double x, double y) async =>
+      await _channel.invokeMethod<bool>('focusAt', {'x': x, 'y': y}) ?? false;
+
+  /// Capture -> shown in the preview, smoothed. Null until the clocks are synced.
+  static Future<double?> displayLatencyMs() async {
+    final v = await _channel.invokeMethod<double>('displayLatencyMs') ?? -1;
+    return v < 0 ? null : v;
+  }
+
   static Future<void> stop() => _channel.invokeMethod('stop');
 }

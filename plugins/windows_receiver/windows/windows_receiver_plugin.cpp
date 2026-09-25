@@ -54,6 +54,17 @@ void WindowsReceiverPlugin::HandleMethodCall(const flutter::MethodCall<Encodable
         {EncodableValue("port"), EncodableValue(static_cast<int32_t>(r->port()))},
         {EncodableValue("textureId"), EncodableValue(r->texture_id())},
     });
+  } else if (call.method_name() == "focusAt") {
+    const auto* args = std::get_if<EncodableMap>(call.arguments());
+    double x = -1, y = -1;
+    if (args) {
+      auto ix = args->find(EncodableValue("x")), iy = args->find(EncodableValue("y"));
+      if (ix != args->end() && std::holds_alternative<double>(ix->second)) x = std::get<double>(ix->second);
+      if (iy != args->end() && std::holds_alternative<double>(iy->second)) y = std::get<double>(iy->second);
+    }
+    result->Success(EncodableValue(receiver_ && receiver_->FocusAt(x, y)));
+  } else if (call.method_name() == "displayLatencyMs") {
+    result->Success(EncodableValue(receiver_ ? receiver_->DisplayLatencyMs() : -1.0));
   } else if (call.method_name() == "stop") {
     Stop();
     result->Success();

@@ -6,6 +6,7 @@ import 'dart:io';
 import 'package:ffi/ffi.dart';
 
 import '../core_bindings/lenny_bindings.dart';
+import '../state/camera.dart';
 
 /// The one lenny_core library in this process. The native plugins load the very same file, so a session created
 /// natively can be driven from here by its address.
@@ -22,9 +23,10 @@ class CoreEvent {
 }
 
 class PeerInfo {
-  const PeerInfo(this.name, this.platform);
+  const PeerInfo(this.name, this.platform, this.caps);
   final String name;
   final int platform;
+  final CameraCaps caps; // receiver: the phone's camera, from its CAPS
 }
 
 class StreamInfo {
@@ -35,8 +37,15 @@ class StreamInfo {
 }
 
 class CoreStats {
-  const CoreStats({required this.rttUs, required this.frames, required this.bytes, required this.reconnects});
+  const CoreStats({
+    required this.rttUs,
+    required this.frames,
+    required this.bytes,
+    required this.reconnects,
+    required this.latencyUs,
+  });
   final int rttUs, frames, bytes, reconnects;
+  final int latencyUs; // receiver: capture -> received; -1 unknown
 }
 
 /// Control-plane view of a native session: events, status getters, approve. Video never passes through here.
@@ -66,12 +75,57 @@ class CoreSession {
   PeerInfo? peer() => using((arena) {
         final p = arena<lenny_peer_info>();
         if (core.lenny_session_peer(_ptr, p) != LENNY_OK) return null;
-        final bytes = <int>[];
-        for (var i = 0; i < 64 && p.ref.name[i] != 0; i++) {
-          bytes.add(p.ref.name[i] & 0xFF);
+        final r = p.ref;
+        final lenses = List.filled(r.lens_count, '');
+        for (var i = 0; i < r.lens_count; i++) {
+          if (r.lens_ids[i] < lenses.length) lenses[r.lens_ids[i]] = _cString(r.lens_labels[i], 32);
         }
-        return PeerInfo(utf8.decode(bytes, allowMalformed: true), p.ref.platform);
+        final hasExposure = r.exposure_step_milli != 0;
+        return PeerInfo(
+          _cString(r.name, 64),
+          r.platform,
+          CameraCaps(
+            controls: r.controls,
+            lenses: lenses,
+            exposure: hasExposure ? (min: r.exposure_min, max: r.exposure_max, step: r.exposure_step_milli) : null,
+          ),
+        );
       });
+
+  /// Receiver: the phone's current camera state (LENNY_EVENT_CONTROL_STATE).
+  CameraControls? controlState() => using((arena) {
+        final c = arena<lenny_control_state>();
+        if (core.lenny_session_control_state(_ptr, c) != LENNY_OK) return null;
+        final r = c.ref;
+        return CameraControls(
+          afMode: r.af_mode,
+          exposureEvMilli: r.exposure_comp,
+          aeLock: r.exposure_lock != 0,
+          awbLock: r.wb_lock != 0,
+          torch: r.torch != 0,
+          lens: r.lens_id,
+          zoom100: r.zoom,
+        );
+      });
+
+  /// Receiver: send a camera control to the phone. Returns LENNY_OK or an error code.
+  int sendControl(int cmd, {int x = 0, int y = 0, int value = 0}) => using((arena) {
+        final c = arena<lenny_control>();
+        c.ref
+          ..cmd = cmd
+          ..x = x
+          ..y = y
+          ..value = value;
+        return core.lenny_receiver_send_control(_ptr, c);
+      });
+
+  static String _cString(Array<Char> chars, int max) {
+    final bytes = <int>[];
+    for (var i = 0; i < max && chars[i] != 0; i++) {
+      bytes.add(chars[i] & 0xFF);
+    }
+    return utf8.decode(bytes, allowMalformed: true);
+  }
 
   StreamInfo? streamInfo() => using((arena) {
         final s = arena<lenny_stream_settings>();
@@ -83,7 +137,13 @@ class CoreSession {
   CoreStats stats() => using((arena) {
         final s = arena<lenny_stats>();
         core.lenny_session_get_stats(_ptr, s);
-        return CoreStats(rttUs: s.ref.rtt_us, frames: s.ref.frames, bytes: s.ref.bytes, reconnects: s.ref.reconnects);
+        return CoreStats(
+          rttUs: s.ref.rtt_us,
+          frames: s.ref.frames,
+          bytes: s.ref.bytes,
+          reconnects: s.ref.reconnects,
+          latencyUs: s.ref.latency_us,
+        );
       });
 
   /// Receiver: answer an approval prompt.

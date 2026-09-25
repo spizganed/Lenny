@@ -725,6 +725,25 @@ int32_t Session::dispatch_receiver(const wire::Header& h, wire::View p, int64_t 
         case wire::MsgType::Caps: {
             if (phase_ != Phase::PairOrCaps) break;
             if (!wire::decode(p, peer_caps_)) return goodbye(LENNY_REASON_PROTOCOL_ERROR);
+            {
+                std::lock_guard lock(info_mu_);
+                peer_info_.controls = uint32_t(peer_caps_.controls);
+                peer_info_.lens_count = 0;
+                for (const auto& l : peer_caps_.lenses) {
+                    if (peer_info_.lens_count == LENNY_MAX_PEER_LENSES) break;
+                    const uint8_t i = peer_info_.lens_count++;
+                    peer_info_.lens_ids[i] = l.id;
+                    peer_info_.lens_facing[i] = l.facing;
+                    const size_t n = std::min(l.label.size(), sizeof peer_info_.lens_labels[i] - 1);
+                    std::copy_n(l.label.begin(), n, peer_info_.lens_labels[i]);
+                    peer_info_.lens_labels[i][n] = 0;
+                }
+                if (peer_caps_.has_exposure_range) {
+                    peer_info_.exposure_min = peer_caps_.exposure_min;
+                    peer_info_.exposure_max = peer_caps_.exposure_max;
+                    peer_info_.exposure_step_milli = peer_caps_.exposure_step_milli;
+                }
+            }
             if (trusted(peer_.device_id)) {
                 on_caps_complete(now);
             } else {

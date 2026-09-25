@@ -58,14 +58,19 @@ bool Receiver::Start(uint16_t port) {
         it.keyframe = f->flags & LENNY_FRAME_KEYFRAME;
         it.orientation = f->orientation;
         it.pts_us = f->pts_us;
+        it.local_pts_us = f->local_pts_us;
         it.data.assign(f->data, f->data + f->size);
         static_cast<Receiver*>(u)->Push(std::move(it));
     };
     cb.on_stream_start = [](void* u, const lenny_stream_settings*) {
         auto* self = static_cast<Receiver*>(u);
-        std::lock_guard lock(self->queue_mu_);
-        self->queue_.clear();
-        self->waiting_for_key_ = true;
+        {
+            std::lock_guard lock(self->queue_mu_);
+            self->queue_.clear();
+            self->waiting_for_key_ = true;
+        }
+        std::lock_guard lock(self->geo_mu_);
+        self->display_latency_ms_ = -1;
     };
     session_ = lenny_receiver_create(&cfg, &cb);
     decoder_thread_ = std::thread([this] { DecodeLoop(); });
@@ -127,6 +132,15 @@ void Receiver::DecodeLoop() {
                     pixel_buffer_.height = kPreviewH;
                 }
                 textures_->MarkTextureFrameAvailable(texture_id_);
+                std::lock_guard lock(geo_mu_);
+                frame_w_ = frame.width;
+                frame_h_ = frame.height;
+                frame_rot_ = it.orientation;
+                if (it.local_pts_us) {
+                    // Excludes the last hop (Flutter compositing + monitor scan-out, ~1-2 frames).
+                    const double ms = double(lenny_now_us() - it.local_pts_us) / 1000.0;
+                    display_latency_ms_ = display_latency_ms_ < 0 ? ms : display_latency_ms_ * 0.9 + ms * 0.1;
+                }
             });
             if (!ok) {  // corrupt data or decoder fault: start clean from the next keyframe
                 decoder.Reset();
@@ -140,6 +154,25 @@ void Receiver::DecodeLoop() {
         }
     }
     CoUninitialize();
+}
+
+bool Receiver::FocusAt(double x, double y) {
+    int w, h, rot;
+    {
+        std::lock_guard lock(geo_mu_);
+        w = frame_w_;
+        h = frame_h_;
+        rot = frame_rot_;
+    }
+    double u, v;
+    if (!session_ || w <= 0 || !canvas_to_upright(x, y, w, h, rot, kPreviewW, kPreviewH, u, v)) return false;
+    lenny_control c{0, LENNY_CTL_FOCUS_AT, uint16_t(u * 65535), uint16_t(v * 65535), 0};
+    return lenny_receiver_send_control(session_, &c) == LENNY_OK;
+}
+
+double Receiver::DisplayLatencyMs() {
+    std::lock_guard lock(geo_mu_);
+    return display_latency_ms_;
 }
 
 const FlutterDesktopPixelBuffer* Receiver::CopyPixels(size_t, size_t) {
