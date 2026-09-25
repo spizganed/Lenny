@@ -325,7 +325,10 @@ to the format the consumer picked, so the receiver app writes one frame at one s
   to android_camera), `ReceiverService` (desktop: windows_receiver), `DiscoveryService`, `UsbService`,
   `PairingService` (QR token generation/parsing).
 - Role is chosen by platform: Android/iOS → sender screens, Windows/Linux → receiver screens.
-- Brand: `lib/brand.dart` holds `appName = 'Lenny'`, `desktopAppName = 'Lenny Desktop'`. Native projects
+- Brand: `lib/brand.dart` holds `appName = 'Lenny'`, `desktopAppName = 'Lenny Desktop'`,
+  `storeName = 'Lenny – Phone Webcam'` (store listings only; in-app it's just "Lenny"),
+  `appId = 'com.spizganed.lenny'` (Android applicationId, iOS bundle id, Windows AppUserModelID prefix).
+  The app id can never change after the first store release. Native projects
   (AndroidManifest label, Windows resource file, installer product name) get it from a generated
   `brand.json` at build time so the name really lives in one place.
 - **Mascot slot:** `MascotSlot` widget on the home/connection screen, sized box with a
