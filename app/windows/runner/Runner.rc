@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.spizganed" "\0"
-            VALUE "FileDescription", "lenny" "\0"
+            VALUE "FileDescription", "Lenny Desktop" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "lenny" "\0"
+            VALUE "InternalName", "Lenny" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.spizganed. All rights reserved." "\0"
-            VALUE "OriginalFilename", "lenny.exe" "\0"
-            VALUE "ProductName", "lenny" "\0"
+            VALUE "OriginalFilename", "Lenny.exe" "\0"
+            VALUE "ProductName", "Lenny" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

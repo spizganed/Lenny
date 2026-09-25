@@ -51,10 +51,10 @@ int main(int argc, char** argv) {
         lenny_stats s{};
         lenny_session_get_stats(g_rx, &s);
         if (s.frames != last.frames)
-            std::printf("fps %llu  kbps %llu  keyframes %d  configs %d  rtt %.1f ms  orientation %d\n",
+            std::printf("fps %llu  kbps %llu  keyframes %d  configs %d  rtt %.1f ms  latency %.1f ms  orientation %d\n",
                         static_cast<unsigned long long>(s.frames - last.frames),
                         static_cast<unsigned long long>((s.bytes - last.bytes) * 8 / 1000), g_keyframes.load(),
-                        g_configs.load(), s.rtt_us / 1000.0, g_orientation.load() * 90);
+                        g_configs.load(), s.rtt_us / 1000.0, s.latency_us / 1000.0, g_orientation.load() * 90);
         std::fflush(stdout);
         last = s;
     }

@@ -1,4 +1,4 @@
-# lenny
+# Lenny
 
 Use your phone as a webcam
 

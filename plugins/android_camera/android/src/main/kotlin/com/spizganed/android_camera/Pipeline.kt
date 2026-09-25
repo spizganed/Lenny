@@ -382,6 +382,10 @@ class Pipeline(private val context: Context) : SenderListener, LifecycleOwner {
                         LennyNative.sendConfig(handle, buf, info.offset, info.size)
                     } else {
                         if (!ptsCalibrated) calibratePts(info.presentationTimeUs)
+                        // A capture time in the future is impossible, so this camera's clock is off (the emulator's
+                        // front camera). Checked per frame, not once: the first frame after a switch encodes slowest.
+                        val now = LennyNative.nowUs()
+                        if (info.presentationTimeUs - ptsOffsetUs > now) ptsOffsetUs = info.presentationTimeUs - now
                         val key = if (info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0) LennyNative.FRAME_KEYFRAME else 0
                         // Copied into the core's queue; never waits on the network. Not streaming -> dropped.
                         LennyNative.sendFrame(
@@ -421,8 +425,6 @@ class Pipeline(private val context: Context) : SenderListener, LifecycleOwner {
                 ptsUs - now
             }
         }
-        // A capture time in the future is impossible; treat it as "just now" (the emulator's front camera does this).
-        if (now - (ptsUs - ptsOffsetUs) < 0) ptsOffsetUs = ptsUs - now
         ptsCalibrated = true
     }
 
