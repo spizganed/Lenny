@@ -30,6 +30,15 @@ Not there yet:
 - iOS phone app and Linux desktop app (designed for, not built). macOS is out of scope.
 - USB connection, encryption.
 
+## Next up
+
+1. **Virtual camera** on Windows (plan in [architecture §7.3–7.4](docs/architecture.md)): shared-memory frame buffer + DirectShow / Media Foundation camera.
+2. **OBS plugin.**
+3. Desktop at the default 1600×900 window: the Exposure card scrolls and some stat values get cut off. Make it fit.
+4. 60 fps (needs Camera2 high-speed session on some phones), on-phone preview, settings screen, bundle fonts offline.
+
+Testing notes live in [docs/testing.md](docs/testing.md). The wire protocol is at 1.2 (battery level added to CONTROL_STATE).
+
 ## Try it
 
 Grab the Android APK and the Windows zip from the [Releases](../../releases) page, when there is one. Otherwise build it:
