@@ -30,7 +30,7 @@ encryption (deferred, see §9), macOS receiver (dropped, see §11), mascot art.
  ├────────┼─────────────────┼───┤                   ├────────┼──────────────────┼──────────┤
  │ android_camera plugin    │   │                   │ windows_receiver plugin   │          │
  │ (Kotlin)                 │   │                   │ (C++)                     │          │
- │  CameraX + Camera2Interop│   │                   │  MF H.264 decoder ──┐     │          │
+ │  Camera2                 │   │                   │  MF H.264 decoder ──┐     │          │
  │  MediaCodec H.264 ─┐     │   │                   │                     ▼     │          │
  │  NsdManager        │     │   │                   │  Shared-mem writer (Global\)         │
  │  Foreground service│     │   │                   ├─────────────────────┬────────────────┤
@@ -69,7 +69,7 @@ fed from the same decoded NV12 frames.
     core_bindings/        ← ffigen output (generated, don't edit)
 /core       C++20 library, CMake, C ABI in include/lenny/lenny.h, tests in core/tests
 /plugins
-  android_camera/         Kotlin: CameraX, MediaCodec encoder, NsdManager, foreground service
+  android_camera/         Kotlin: Camera2, MediaCodec encoder, NsdManager, foreground service
   windows_receiver/       C++: MF decoder, shm writer, DNS-SD browse, adb helper, preview texture
   windows_vcam/           C++: DirectShow filter DLL (x86+x64), MF vcam media source DLL
   qr_scan/                one-off QR scan (Android), see §8
@@ -125,7 +125,7 @@ because they wrap OS APIs). Core only sees bytes and timestamps.
 
 | Interface | Android (P1) | Windows (P1) | Later |
 |---|---|---|---|
-| `ICameraSource` | CameraX + Camera2Interop (Kotlin) | — | iOS AVFoundation |
+| `ICameraSource` | Camera2 (Kotlin) | — | iOS AVFoundation |
 | `IEncoder` | MediaCodec H.264 | — | VideoToolbox |
 | `IDecoder` | — | Media Foundation H.264 → NV12 | VideoToolbox, VA-API/FFmpeg |
 | `IVirtualCamera` | — | DirectShow filter, MF vcam | v4l2loopback |
@@ -174,16 +174,24 @@ which the phone keeps).
 
 ## 6. Android sender
 
-- CameraX `Preview` use case bound to MediaCodec's input `Surface` (via `Preview.SurfaceProvider`),
-  plus a second `Preview` (or `SurfaceTexture` split) for the on-screen Flutter texture.
-  Risk: some devices limit concurrent surfaces. Fallback is to render preview from a GL
-  copy of the encoder surface.
-- Camera2Interop: `CONTROL_AF_MODE_CONTINUOUS_VIDEO`, `CONTROL_AE_MODE_ON`,
+- Camera2 capture session straight into MediaCodec's input `Surface`; the on-screen Flutter texture
+  becomes a second output of the same session. Camera2 rather than CameraX: CameraX only sees
+  `CameraManager.cameraIdList`, and phones often leave the ultrawide and tele out of it while still
+  letting apps open them (Nothing Phone (3a): list = main + front; ultrawide, tele and a logical
+  0.6x-10x camera are hidden but open fine).
+- Lenses: every openable camera (listed ids plus probed hidden ids). A logical multi-camera becomes one
+  lens per physical sensor, at the zoom ratio that selects it (from 35 mm-equivalent focal lengths):
+  "0.6x", "1x", "2x". Switching between those is a new repeating request with another
+  `CONTROL_ZOOM_RATIO`, no session restart; other lenses reopen the camera. Output size is picked
+  explicitly (exact, else same aspect ratio), so the stream keeps the negotiated size on every lens.
+- Request: `CONTROL_AF_MODE_CONTINUOUS_VIDEO`, `CONTROL_AE_MODE_ON`,
   `CONTROL_AE_TARGET_FPS_RANGE=[30,30]` (or the chosen fps), `CONTROL_AE_ANTIBANDING_MODE_AUTO`,
-  `CONTROL_AWB_MODE_AUTO`.
+  `CONTROL_AWB_MODE_AUTO`, `CONTROL_VIDEO_STABILIZATION_MODE_OFF` (EIS buffers frames ahead).
+- Orientation: from the orientation sensor (`OrientationEventListener`), so it's right whichever way the
+  phone stands; flat on a table keeps the last value.
 - Tap-to-focus: receiver sends `CONTROL focus_at(x,y)` in normalized sensor-upright coords.
-  Sender maps it with `SurfaceOrientedMeteringPointFactory` → `FocusMeteringAction`, then
-  returns to continuous AF after the action's auto-cancel duration (default 5 s) unless focus lock is on.
+  Sender maps it to an AF/AE region in the visible part of the active array, triggers AF, then
+  returns to continuous AF after 5 s unless focus lock is on.
 - MediaCodec: `video/avc`, `COLOR_FormatSurface`, CBR/VBR bitrate from CAPS_SELECT,
   `KEY_I_FRAME_INTERVAL=1` s, `KEY_LOW_LATENCY=1` (API 30+), `KEY_MAX_B_FRAMES=0`,
   Baseline or Constrained High profile. Keyframe on demand via `PARAMETER_KEY_REQUEST_SYNC_FRAME`.
@@ -292,8 +300,8 @@ to the format the consumer picked, so the receiver app writes one frame at one s
   (`NotifyIpInterfaceChange`). Stale → "Refresh" action on the card.
 - Phone: "Scan to connect" opens a one-off scanner. For the scanner we use Google Code Scanner
   (`play-services-code-scanner`), which has no camera permission and runs in the system UI. This is the
-  OS-camera reuse the prompt asks for, and it's separate from the streaming CameraX pipeline.
-  Fallback for devices without Play services: ML Kit barcode with CameraX in the plugin.
+  OS-camera reuse the prompt asks for, and it's separate from the streaming camera pipeline.
+  Fallback for devices without Play services: typing the address.
 - Trust: the token only proves "this phone saw this screen recently". It goes through `PAIR_REQUEST`
   in the normal session (protocol.md §6). No token = the receiver's policy decides: phase 1 default is
   **accept unpaired LAN connections but show an accept/deny prompt on first connect of an unknown

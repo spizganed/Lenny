@@ -68,9 +68,5 @@ kotlin {
 }
 
 dependencies {
-    val cameraxVersion = "1.4.2"
-    implementation("androidx.camera:camera-core:$cameraxVersion")
-    implementation("androidx.camera:camera-camera2:$cameraxVersion")
-    implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
     implementation("androidx.core:core-ktx:1.13.1")
 }

@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
-import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.engine.plugins.FlutterPlugin
@@ -25,7 +24,6 @@ import java.util.concurrent.Executors
  *   control({cmd, x, y, value}) -> int (LENNY_ACK_*): the phone's own camera buttons
  * Native -> Dart: state(map) whenever the camera control state changes.
  */
-@ExperimentalCamera2Interop
 class AndroidCameraPlugin :
     FlutterPlugin, MethodChannel.MethodCallHandler, ActivityAware, PluginRegistry.RequestPermissionsResultListener {
     private lateinit var channel: MethodChannel
@@ -58,7 +56,7 @@ class AndroidCameraPlugin :
                 val token = call.argument<ByteArray>("token")
                 val p = Pipeline(context)
                 p.onStateChanged = { channel.invokeMethod("state", it.toMap()) }
-                // Off the main thread: start() waits for CameraX to list the cameras.
+                // Off the main thread: start() waits for the camera to probe lenses.
                 background.execute {
                     try {
                         val session = p.start(host, port, token)

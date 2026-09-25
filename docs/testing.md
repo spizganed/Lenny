@@ -42,4 +42,9 @@ Last run: 2026-09-25, emulator (Android 16, x86_64) -> Windows 11. Latency is ca
 | 3 | Switch back to Back | Same as 1 | ✅ |
 | 4 | Torch, Lock focus, Auto, exposure ± | Phone applies it, desktop controls mirror phone state | ✅ |
 | 5 | Tap the desktop preview | Phone focuses there | ✅ |
-| 6 | Real phone over Wi-Fi | Same as 1–5, glass-to-glass < 150 ms | not yet run (phone busy) |
+| 6 | Real phone over Wi-Fi | Same as 1–5, glass-to-glass < 150 ms | ✅ Nothing Phone (3a): 30 fps 1080p, 110–140 ms capture -> shown (release desktop; a debug desktop adds 100+ ms converting the preview) |
+| 7 | Lens buttons (0.6×, 1×, 2×, Front on a phone with those) | Each switches, stream stays at the negotiated size | ✅ 1920×1080 on every lens |
+| 8 | Phone standing in landscape | Desktop preview upright | ✅ |
+
+Known: white specks along dark edges in low light (seen on 0.6× and front). Converter math checked; source not
+yet isolated (phone ISP sharpening vs decoder concealment).
