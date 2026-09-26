@@ -130,7 +130,7 @@ bool streaming(lenny_session* s) { return lenny_session_state(s) == LENNY_STATE_
 
 }  // namespace
 
-TEST(abi_version) { CHECK(lenny_abi_version() == ((1u << 16) | 2u)); }
+TEST(abi_version) { CHECK(lenny_abi_version() == ((1u << 16) | 3u)); }
 
 TEST(full_session_with_approval_video_and_controls) {
     Recv r;

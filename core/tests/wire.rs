@@ -46,16 +46,16 @@ fn vector_hello_decodes_and_reencodes() {
     let m = Hello::decode(&p).unwrap();
     assert!(m.role == 1 && m.proto_major == 1 && m.proto_minor == 0 && m.device_name == b"Pix");
     assert!(m.device_id[0] == 0x00 && m.device_id[15] == 0x0F);
-    assert_eq!(to_message(&m, VERSION_MINOR), v);
+    assert_eq!(to_message(&m, h.ver_minor), v); // a 1.0 vector: re-encoded as 1.0
 }
 
 #[test]
 fn vector_control_focus_at() {
     let v = load_vector("control_focus_at.hex");
-    let (_, p) = read_one(&v).unwrap();
+    let (h, p) = read_one(&v).unwrap();
     let c = Control::decode(&p).unwrap();
     assert!(c.0.req_id == 7 && c.0.cmd == LENNY_CTL_FOCUS_AT as u16 && c.0.x == 0x8000 && c.0.y == 0x4000);
-    assert_eq!(to_message(&c, VERSION_MINOR), v);
+    assert_eq!(to_message(&c, h.ver_minor), v);
 }
 
 #[test]
@@ -183,8 +183,8 @@ fn roundtrip_all_messages() {
         max_bitrate_kbps: 12000,
         controls: (LENNY_CAP_FOCUS | LENNY_CAP_TORCH) as u64,
         lenses: vec![
-            Lens { id: 0, facing: 0, label: b"Wide".to_vec() },
-            Lens { id: 1, facing: 1, label: b"Front".to_vec() },
+            Lens { id: 0, facing: 0, label: b"Wide".to_vec(), ..Default::default() },
+            Lens { id: 1, facing: 1, label: b"Front".to_vec(), ..Default::default() },
         ],
         has_exposure_range: true,
         exposure_min: -2000,
@@ -209,7 +209,7 @@ fn roundtrip_all_messages() {
     let vc = VideoConfig { codec: LENNY_CODEC_H264, config: vec![0, 0, 0, 1, 0x67] };
     assert_eq!(roundtrip(&vc).config, vc.config);
 
-    for cmd in LENNY_CTL_KEYFRAME_REQUEST as u16..=LENNY_CTL_RESET_AUTO as u16 {
+    for cmd in LENNY_CTL_KEYFRAME_REQUEST as u16..=LENNY_CTL_PAN as u16 {
         let mut c = lenny_control { req_id: 42, cmd, ..Default::default() };
         if cmd == LENNY_CTL_EXPOSURE_COMP as u16 {
             c.value = -1333;
@@ -234,10 +234,13 @@ fn roundtrip_all_messages() {
         zoom: 150,
         battery: 87,
         charging: 1,
+        pan_x: 1000,
+        pan_y: 60000,
     };
     assert_eq!(roundtrip(&ControlState(cs)).0, cs);
-    // a 1.1 phone sends no battery tag
-    assert_eq!(ControlState::decode(&[]).unwrap().0.battery, 255);
+    // an old phone sends no battery or pan tags
+    let old = ControlState::decode(&[]).unwrap().0;
+    assert!(old.battery == 255 && old.pan_x == PAN_CENTER && old.pan_y == PAN_CENTER);
 }
 
 #[test]
@@ -264,4 +267,37 @@ fn pair_tokens_single_use_and_expiry() {
     assert_eq!(ts.redeem(&a, 600), LENNY_PAIR_ALREADY_USED);
     assert_eq!(ts.redeem(&b, 2000), LENNY_PAIR_EXPIRED);
     assert_eq!(ts.redeem(&[0; 16], 0), LENNY_PAIR_UNKNOWN_TOKEN);
+}
+
+#[test]
+fn vector_control_pan() {
+    let v = load_vector("control_pan.hex");
+    let (_, p) = read_one(&v).unwrap();
+    let c = Control::decode(&p).unwrap();
+    assert!(c.0.req_id == 9 && c.0.cmd == LENNY_CTL_PAN as u16 && c.0.x == 0xC000 && c.0.y == 0x8000);
+    assert_eq!(to_message(&c, 1), v);
+}
+
+#[test]
+fn vector_caps_per_lens_1_1() {
+    let v = load_vector("caps_lens_1_1.hex");
+    let (h, p) = read_one(&v).unwrap();
+    assert_eq!(h.ver_minor, 1);
+    let c = Caps::decode(&p).unwrap();
+    let hd = lenny_mode { width: 1280, height: 720, fps_num: 30, fps_den: 1 };
+    assert_eq!(c.modes, vec![lenny_mode { width: 1920, height: 1080, fps_num: 30, fps_den: 1 }]);
+    assert_eq!(c.controls, (LENNY_CAP_LENS | LENNY_CAP_ZOOM | LENNY_CAP_PAN) as u64);
+    let lens = Lens { id: 0, facing: 0, label: b"1x".to_vec(), modes: vec![hd], zoom_min: 60, zoom_max: 1000 };
+    assert_eq!(c.lenses, vec![lens]);
+    assert_eq!(to_message(&c, 1), v);
+    // A 1.0 peer gets the same CAPS without the per-lens fields, and still decodes it.
+    let old = Caps::decode(&read_one(&to_message(&c, 0)).unwrap().1).unwrap();
+    assert!(old.lenses[0].modes.is_empty() && old.lenses[0].zoom_max == 0 && old.lenses[0].label == b"1x");
+}
+
+#[test]
+fn newer_fields_are_left_out_for_older_peers() {
+    let cs = ControlState(lenny_control_state { pan_x: 7, pan_y: 8, ..Default::default() });
+    assert_eq!(ControlState::decode(&read_one(&to_message(&cs, 1)).unwrap().1).unwrap().0.pan_x, 7);
+    assert_eq!(ControlState::decode(&read_one(&to_message(&cs, 0)).unwrap().1).unwrap().0.pan_x, PAN_CENTER);
 }

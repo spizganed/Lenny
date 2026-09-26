@@ -161,6 +161,7 @@ struct Info {
     has_peer: bool,
     has_settings: bool,
     has_control_state: bool,
+    has_caps: bool, // peer_caps_copy is from the current peer
     peer_info: lenny_peer_info,
     settings: lenny_stream_settings,
     control_state: lenny_control_state,
@@ -604,11 +605,14 @@ impl Session {
         if s.role != Role::Receiver {
             return LENNY_E_STATE;
         }
-        if c.cmd < LENNY_CTL_KEYFRAME_REQUEST as u16 || c.cmd > LENNY_CTL_RESET_AUTO as u16 {
+        if c.cmd < LENNY_CTL_KEYFRAME_REQUEST as u16 || c.cmd > LENNY_CTL_PAN as u16 {
             return LENNY_E_INVALID_ARG;
         }
         if !s.streaming.load(SeqCst) {
             return LENNY_E_STATE;
+        }
+        if c.cmd == LENNY_CTL_PAN as u16 && s.minor.load(SeqCst) < 1 {
+            return LENNY_E_STATE; // a 1.0 phone doesn't know pan (§4)
         }
         c.req_id = s.next_req_id.fetch_add(1, SeqCst);
         if s.send(&wire::Control(*c)) {
@@ -652,6 +656,13 @@ impl Session {
     pub fn stream_settings(&self) -> (bool, lenny_stream_settings) {
         let i = lock(&self.inner.info);
         (i.has_settings, i.settings)
+    }
+
+    /// Receiver: the phone's full CAPS, including per-lens modes and zoom ranges (1.1), which lenny_peer_info doesn't
+    /// carry. None until CAPS arrived.
+    pub fn peer_caps(&self) -> Option<wire::Caps> {
+        let i = lock(&self.inner.info);
+        i.has_caps.then(|| i.peer_caps_copy.clone())
     }
 
     pub fn control_state(&self) -> (bool, lenny_control_state) {
@@ -1061,8 +1072,8 @@ impl<'a> Io<'a> {
             copy_c(&mut p.name, &h.device_name);
             info.peer_info = p;
             info.has_peer = true;
+            info.has_caps = false;
         }
-        #[allow(clippy::unnecessary_min_or_max)] // not a no-op once VERSION_MINOR > 0
         s.minor.store(wire::VERSION_MINOR.min(h.proto_minor), SeqCst);
         self.peer = h;
         self.next_ping = now + PING_INTERVAL;
@@ -1234,6 +1245,7 @@ impl<'a> Io<'a> {
                         pi.mode_count = n as u8;
                         pi.modes[..n].copy_from_slice(&pc.modes[..n]);
                         info.peer_caps_copy = pc.clone();
+                        info.has_caps = true;
                     }
                     if s.trusted(&self.peer.device_id) {
                         self.on_caps_complete(now);

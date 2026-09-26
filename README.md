@@ -37,7 +37,7 @@ Not there yet:
 3. Desktop at the default 1600×900 window: the Exposure card scrolls and some stat values get cut off. Make it fit.
 4. 60 fps (needs Camera2 high-speed session on some phones), on-phone preview, settings screen, bundle fonts offline.
 
-Testing notes live in [docs/testing.md](docs/testing.md). The wire protocol is at 1.2 (battery level added to CONTROL_STATE).
+Testing notes live in [docs/testing.md](docs/testing.md). The wire protocol is at 1.1 ([protocol.md](docs/protocol.md) §11).
 
 ## Try it
 

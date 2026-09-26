@@ -5,11 +5,14 @@ use crate::abi::*;
 pub const MAGIC0: u8 = 0x4C; // 'L'
 pub const MAGIC1: u8 = 0x59; // 'Y'
 pub const VERSION_MAJOR: u8 = 1;
-pub const VERSION_MINOR: u8 = 0;
+/// 1.1: per-lens modes and zoom range in CAPS, CONTROL pan, pan in CONTROL_STATE (protocol.md §11).
+pub const VERSION_MINOR: u8 = 1;
 pub const HEADER_SIZE: usize = 12;
 pub const MAX_VIDEO_PAYLOAD: u32 = 4 << 20;
 pub const MAX_CONTROL_PAYLOAD: u32 = 64 << 10;
 pub const VIDEO_FRAME_META_SIZE: usize = 16;
+/// CONTROL pan / CONTROL_STATE pan_x, pan_y: 0..65535 across the pannable range, this = centered.
+pub const PAN_CENTER: u16 = 32768;
 
 /// Message type ids (protocol.md §5). Plain u16s: unknown ids are valid on the wire and get skipped.
 pub mod msg {
@@ -251,7 +254,8 @@ pub type Str = Vec<u8>;
 
 pub trait Message: Sized {
     const TYPE: u16;
-    fn encode(&self, w: &mut TlvWriter);
+    /// `minor` = negotiated protocol minor: fields newer than it are left out (§4).
+    fn encode(&self, w: &mut TlvWriter, minor: u8);
     /// None = malformed or missing a required field; the message must be ignored (§6).
     fn decode(v: &[u8]) -> Option<Self>;
 }
@@ -259,7 +263,7 @@ pub trait Message: Sized {
 /// Full message (header + TLV payload).
 pub fn to_message<M: Message>(m: &M, minor: u8) -> Vec<u8> {
     let mut out = vec![0; HEADER_SIZE];
-    m.encode(&mut TlvWriter(&mut out));
+    m.encode(&mut TlvWriter(&mut out), minor);
     let h = Header { ver_minor: minor, typ: M::TYPE, length: (out.len() - HEADER_SIZE) as u32, ..Default::default() };
     put_header(&mut out, &h);
     out
@@ -296,7 +300,7 @@ impl Default for Hello {
 
 impl Message for Hello {
     const TYPE: u16 = msg::HELLO;
-    fn encode(&self, w: &mut TlvWriter) {
+    fn encode(&self, w: &mut TlvWriter, _minor: u8) {
         w.u8(1, self.proto_major);
         w.u8(2, self.proto_minor);
         w.u8(3, self.role);
@@ -372,7 +376,7 @@ pub struct Goodbye {
 
 impl Message for Goodbye {
     const TYPE: u16 = msg::GOODBYE;
-    fn encode(&self, w: &mut TlvWriter) {
+    fn encode(&self, w: &mut TlvWriter, _minor: u8) {
         w.u16(1, self.reason);
         if !self.detail.is_empty() {
             w.str(2, &self.detail);
@@ -404,7 +408,7 @@ pub struct Ping {
 
 impl Message for Ping {
     const TYPE: u16 = msg::PING;
-    fn encode(&self, w: &mut TlvWriter) {
+    fn encode(&self, w: &mut TlvWriter, _minor: u8) {
         w.u32(1, self.seq);
         w.i64(2, self.t1);
     }
@@ -436,7 +440,7 @@ pub struct Pong {
 
 impl Message for Pong {
     const TYPE: u16 = msg::PONG;
-    fn encode(&self, w: &mut TlvWriter) {
+    fn encode(&self, w: &mut TlvWriter, _minor: u8) {
         w.u32(1, self.seq);
         w.i64(2, self.t1);
         w.i64(3, self.t2);
@@ -475,7 +479,7 @@ pub struct PairRequest {
 
 impl Message for PairRequest {
     const TYPE: u16 = msg::PAIR_REQUEST;
-    fn encode(&self, w: &mut TlvWriter) {
+    fn encode(&self, w: &mut TlvWriter, _minor: u8) {
         w.bytes(1, &self.token);
     }
     fn decode(v: &[u8]) -> Option<Self> {
@@ -505,7 +509,7 @@ pub struct PairResult {
 
 impl Message for PairResult {
     const TYPE: u16 = msg::PAIR_RESULT;
-    fn encode(&self, w: &mut TlvWriter) {
+    fn encode(&self, w: &mut TlvWriter, _minor: u8) {
         w.u8(1, self.result);
     }
     fn decode(v: &[u8]) -> Option<Self> {
@@ -541,6 +545,11 @@ pub struct Lens {
     pub id: u8,
     pub facing: u8,
     pub label: Str,
+    /// 1.1: modes this lens can stream (empty = the CAPS-level modes).
+    pub modes: Vec<lenny_mode>,
+    /// 1.1: CONTROL zoom range for this lens, ratio x100 relative to the lens (0/0 = unknown).
+    pub zoom_min: u16,
+    pub zoom_max: u16,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -556,9 +565,43 @@ pub struct Caps {
     pub exposure_step_milli: u32,
 }
 
+fn encode_mode(w: &mut TlvWriter, tag: u16, md: &lenny_mode) {
+    let l = w.begin_list(tag);
+    w.u16(1, md.width);
+    w.u16(2, md.height);
+    w.u16(3, md.fps_num);
+    w.u16(4, md.fps_den);
+    w.end_list(l);
+}
+
+fn decode_mode(v: &[u8]) -> Option<lenny_mode> {
+    let mut md = lenny_mode::default();
+    let mut seen = 0;
+    let ok = each(v, |t, x| match t {
+        1 => {
+            seen |= 1;
+            set(&mut md.width, x)
+        }
+        2 => {
+            seen |= 2;
+            set(&mut md.height, x)
+        }
+        3 => {
+            seen |= 4;
+            set(&mut md.fps_num, x)
+        }
+        4 => {
+            seen |= 8;
+            set(&mut md.fps_den, x)
+        }
+        _ => true,
+    });
+    (ok && seen == 15 && md.fps_den != 0).then_some(md)
+}
+
 impl Message for Caps {
     const TYPE: u16 = msg::CAPS;
-    fn encode(&self, w: &mut TlvWriter) {
+    fn encode(&self, w: &mut TlvWriter, minor: u8) {
         for c in &self.codecs {
             let l = w.begin_list(1);
             w.u8(1, c.id);
@@ -567,12 +610,7 @@ impl Message for Caps {
             w.end_list(l);
         }
         for md in &self.modes {
-            let l = w.begin_list(2);
-            w.u16(1, md.width);
-            w.u16(2, md.height);
-            w.u16(3, md.fps_num);
-            w.u16(4, md.fps_den);
-            w.end_list(l);
+            encode_mode(w, 2, md);
         }
         w.u32(3, self.max_bitrate_kbps);
         w.u64(4, self.controls);
@@ -581,6 +619,17 @@ impl Message for Caps {
             w.u8(1, lens.id);
             w.u8(2, lens.facing);
             w.str(3, &lens.label);
+            if minor >= 1 {
+                for md in &lens.modes {
+                    encode_mode(w, 4, md);
+                }
+                if lens.zoom_max != 0 {
+                    let z = w.begin_list(5);
+                    w.u16(1, lens.zoom_min);
+                    w.u16(2, lens.zoom_max);
+                    w.end_list(z);
+                }
+            }
             w.end_list(l);
         }
         if self.has_exposure_range {
@@ -605,34 +654,7 @@ impl Message for Caps {
                 m.codecs.push(c);
                 ok
             }
-            2 => {
-                let mut md = lenny_mode::default();
-                let mut seen = 0;
-                let ok = each(val, |t, x| match t {
-                    1 => {
-                        seen |= 1;
-                        set(&mut md.width, x)
-                    }
-                    2 => {
-                        seen |= 2;
-                        set(&mut md.height, x)
-                    }
-                    3 => {
-                        seen |= 4;
-                        set(&mut md.fps_num, x)
-                    }
-                    4 => {
-                        seen |= 8;
-                        set(&mut md.fps_den, x)
-                    }
-                    _ => true,
-                });
-                if !ok || seen != 15 || md.fps_den == 0 {
-                    return false;
-                }
-                m.modes.push(md);
-                true
-            }
+            2 => decode_mode(val).map(|md| m.modes.push(md)).is_some(),
             3 => set(&mut m.max_bitrate_kbps, val),
             4 => set(&mut m.controls, val),
             5 => {
@@ -644,6 +666,12 @@ impl Message for Caps {
                         l.label = x.to_vec();
                         true
                     }
+                    4 => decode_mode(x).map(|md| l.modes.push(md)).is_some(),
+                    5 => each(x, |zt, zx| match zt {
+                        1 => set(&mut l.zoom_min, zx),
+                        2 => set(&mut l.zoom_max, zx),
+                        _ => true,
+                    }),
                     _ => true,
                 });
                 m.lenses.push(l);
@@ -715,7 +743,7 @@ pub struct CapsSelect(pub lenny_stream_settings);
 
 impl Message for CapsSelect {
     const TYPE: u16 = msg::CAPS_SELECT;
-    fn encode(&self, w: &mut TlvWriter) {
+    fn encode(&self, w: &mut TlvWriter, _minor: u8) {
         encode_settings(w, &self.0)
     }
     fn decode(v: &[u8]) -> Option<Self> {
@@ -728,7 +756,7 @@ pub struct StreamStart(pub lenny_stream_settings);
 
 impl Message for StreamStart {
     const TYPE: u16 = msg::STREAM_START;
-    fn encode(&self, w: &mut TlvWriter) {
+    fn encode(&self, w: &mut TlvWriter, _minor: u8) {
         encode_settings(w, &self.0)
     }
     fn decode(v: &[u8]) -> Option<Self> {
@@ -744,7 +772,7 @@ pub struct StreamStatus {
 
 impl Message for StreamStatus {
     const TYPE: u16 = msg::STREAM_STATUS;
-    fn encode(&self, w: &mut TlvWriter) {
+    fn encode(&self, w: &mut TlvWriter, _minor: u8) {
         w.u8(1, self.state);
         if !self.reason.is_empty() {
             w.str(2, &self.reason);
@@ -782,7 +810,7 @@ impl Default for VideoConfig {
 
 impl Message for VideoConfig {
     const TYPE: u16 = msg::VIDEO_CONFIG;
-    fn encode(&self, w: &mut TlvWriter) {
+    fn encode(&self, w: &mut TlvWriter, _minor: u8) {
         w.u8(1, self.codec);
         w.bytes(2, &self.config);
     }
@@ -837,11 +865,11 @@ pub fn decode_video_meta(payload: &[u8]) -> Option<(VideoFrameMeta, &[u8])> {
 pub struct Control(pub lenny_control);
 
 const CTL_FIRST: u16 = LENNY_CTL_KEYFRAME_REQUEST as u16;
-const CTL_LAST: u16 = LENNY_CTL_RESET_AUTO as u16;
+const CTL_LAST: u16 = LENNY_CTL_PAN as u16;
 
 impl Message for Control {
     const TYPE: u16 = msg::CONTROL;
-    fn encode(&self, w: &mut TlvWriter) {
+    fn encode(&self, w: &mut TlvWriter, _minor: u8) {
         let c = &self.0;
         w.u32(1, c.req_id);
         const FOCUS_AT: u16 = LENNY_CTL_FOCUS_AT as u16;
@@ -852,8 +880,9 @@ impl Message for Control {
         const SELECT_LENS: u16 = LENNY_CTL_SELECT_LENS as u16;
         const ZOOM: u16 = LENNY_CTL_ZOOM as u16;
         const EXPOSURE_COMP: u16 = LENNY_CTL_EXPOSURE_COMP as u16;
+        const PAN: u16 = LENNY_CTL_PAN as u16;
         match c.cmd {
-            FOCUS_AT => {
+            FOCUS_AT | PAN => {
                 let l = w.begin_list(c.cmd);
                 w.u16(1, c.x);
                 w.u16(2, c.y);
@@ -879,7 +908,7 @@ impl Message for Control {
             }
             c.cmd = tag;
             match tag {
-                t if t == LENNY_CTL_FOCUS_AT as u16 => each(val, |t, x| match t {
+                t if t == LENNY_CTL_FOCUS_AT as u16 || t == LENNY_CTL_PAN as u16 => each(val, |t, x| match t {
                     1 => set(&mut c.x, x),
                     2 => set(&mut c.y, x),
                     _ => true,
@@ -921,7 +950,7 @@ pub struct ControlAck {
 
 impl Message for ControlAck {
     const TYPE: u16 = msg::CONTROL_ACK;
-    fn encode(&self, w: &mut TlvWriter) {
+    fn encode(&self, w: &mut TlvWriter, _minor: u8) {
         w.u32(1, self.req_id);
         w.u8(2, self.result);
     }
@@ -948,7 +977,7 @@ pub struct ControlState(pub lenny_control_state);
 
 impl Message for ControlState {
     const TYPE: u16 = msg::CONTROL_STATE;
-    fn encode(&self, w: &mut TlvWriter) {
+    fn encode(&self, w: &mut TlvWriter, minor: u8) {
         let s = &self.0;
         w.u8(1, s.af_mode);
         w.i32(2, s.exposure_comp);
@@ -959,9 +988,14 @@ impl Message for ControlState {
         w.u16(7, s.zoom);
         w.u8(8, s.battery);
         w.u8(9, s.charging);
+        if minor >= 1 {
+            w.u16(10, s.pan_x);
+            w.u16(11, s.pan_y);
+        }
     }
     fn decode(v: &[u8]) -> Option<Self> {
-        let mut s = lenny_control_state { battery: 255, ..Default::default() }; // older phones don't send it
+        // Older phones send no battery (1.0 before battery) or pan (1.0): unknown battery, centered.
+        let mut s = lenny_control_state { battery: 255, pan_x: PAN_CENTER, pan_y: PAN_CENTER, ..Default::default() };
         let ok = each(v, |tag, val| match tag {
             1 => set(&mut s.af_mode, val),
             2 => set(&mut s.exposure_comp, val),
@@ -972,6 +1006,8 @@ impl Message for ControlState {
             7 => set(&mut s.zoom, val),
             8 => set(&mut s.battery, val),
             9 => set(&mut s.charging, val),
+            10 => set(&mut s.pan_x, val),
+            11 => set(&mut s.pan_y, val),
             _ => true,
         });
         ok.then_some(Self(s))

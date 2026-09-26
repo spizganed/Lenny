@@ -31,7 +31,7 @@ extern "C" {
 #endif
 
 #define LENNY_ABI_VERSION_MAJOR 1
-#define LENNY_ABI_VERSION_MINOR 2
+#define LENNY_ABI_VERSION_MINOR 3
 #define LENNY_DEFAULT_PORT 47474
 #define LENNY_DEVICE_ID_SIZE 16
 #define LENNY_PAIR_TOKEN_SIZE 16
@@ -116,7 +116,8 @@ typedef enum {
     LENNY_CTL_TORCH = 17,          /* value bool */
     LENNY_CTL_SELECT_LENS = 18,    /* value lens_id */
     LENNY_CTL_ZOOM = 19,           /* value ratio*100 */
-    LENNY_CTL_RESET_AUTO = 20
+    LENNY_CTL_RESET_AUTO = 20,
+    LENNY_CTL_PAN = 21             /* ABI 1.3, protocol 1.1: x, y = crop centre, 0..65535 across the pannable range */
 } lenny_control_cmd;
 
 /* CAPS controls bitmask bits. */
@@ -128,7 +129,8 @@ enum {
     LENNY_CAP_WB_LOCK = 1u << 4,
     LENNY_CAP_TORCH = 1u << 5,
     LENNY_CAP_LENS = 1u << 6,
-    LENNY_CAP_ZOOM = 1u << 7
+    LENNY_CAP_ZOOM = 1u << 7,
+    LENNY_CAP_PAN = 1u << 8        /* ABI 1.3 */
 };
 
 enum { LENNY_ACK_OK = 0, LENNY_ACK_UNSUPPORTED = 1, LENNY_ACK_FAILED = 2, LENNY_ACK_BUSY = 3 };
@@ -150,6 +152,7 @@ typedef struct {
     uint16_t zoom;          /* ratio*100 */
     uint8_t battery;        /* phone battery percent 0..100, 255 unknown (ABI 1.2) */
     uint8_t charging;       /* bool (ABI 1.2) */
+    uint16_t pan_x, pan_y;  /* crop centre, 0..65535 across the pannable range, 32768 = centred (ABI 1.3) */
 } lenny_control_state;
 
 /* STREAM_STATUS states. */
@@ -196,6 +199,13 @@ LENNY_API uint32_t lenny_abi_version(void); /* (major << 16) | minor */
 LENNY_API int64_t lenny_now_us(void);
 
 /* ---- Sender (phone) --------------------------------------------------- */
+/* ABI 1.3 (protocol 1.1): what one lens can do, sent in CAPS. A receiver only offers modes the selected lens has. */
+typedef struct {
+    const lenny_mode* modes;   /* modes this lens can stream; mode_count 0 = the config-level modes */
+    size_t mode_count;
+    uint16_t zoom_min, zoom_max; /* LENNY_CTL_ZOOM range for this lens, ratio*100 relative to it; 0 = unknown */
+} lenny_lens_caps;
+
 typedef struct {
     lenny_identity identity;
     const lenny_mode* modes;   /* supported modes, copied */
@@ -206,6 +216,8 @@ typedef struct {
     size_t lens_count;
     int32_t exposure_comp_min, exposure_comp_max; /* EV*1000 */
     uint32_t exposure_comp_step_milli;
+    /* ABI 1.3: per-lens capabilities, parallel to `lenses` (lens_count entries, copied), or NULL. */
+    const lenny_lens_caps* lens_caps;
 } lenny_sender_config;
 
 typedef struct {

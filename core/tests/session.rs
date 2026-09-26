@@ -131,6 +131,19 @@ const MODES: [lenny_mode; 3] = [
     lenny_mode { width: 3840, height: 2160, fps_num: 30, fps_den: 1 },
 ];
 
+/// Per-lens caps (ABI 1.3): the wide lens does 720p and 1080p, the front one only 720p.
+struct LensCaps([lenny_lens_caps; 2]);
+unsafe impl Sync for LensCaps {}
+static LENS_CAPS: LensCaps = LensCaps([
+    lenny_lens_caps { modes: MODES.as_ptr(), mode_count: 2, zoom_min: 100, zoom_max: 800 },
+    lenny_lens_caps { modes: MODES.as_ptr(), mode_count: 1, zoom_min: 0, zoom_max: 0 },
+]);
+impl LensCaps {
+    fn as_ptr(&self) -> *const lenny_lens_caps {
+        self.0.as_ptr()
+    }
+}
+
 unsafe extern "C" fn tx_state(u: *mut c_void, st: i32, reason: i32) {
     if st == LENNY_STATE_CLOSED as i32 {
         s(u).last_reason.store(reason, SeqCst);
@@ -151,7 +164,7 @@ unsafe extern "C" fn tx_control(u: *mut c_void, c: *const lenny_control) -> i32 
         sd.keyframe_requests.fetch_add(1, SeqCst);
         return LENNY_ACK_OK;
     }
-    if c.cmd == LENNY_CTL_FOCUS_AT as u16 {
+    if c.cmd == LENNY_CTL_FOCUS_AT as u16 || c.cmd == LENNY_CTL_PAN as u16 {
         sd.focus_x.store(c.x, SeqCst);
         sd.focus_calls.fetch_add(1, SeqCst);
         return LENNY_ACK_OK;
@@ -176,6 +189,7 @@ fn make_sender(sd: &Send, id_byte: u8) -> *mut lenny_session {
         exposure_comp_min: -2000,
         exposure_comp_max: 2000,
         exposure_comp_step_milli: 333,
+        lens_caps: LENS_CAPS.as_ptr(),
     };
     let cb = lenny_sender_callbacks {
         user: sd as *const Send as *mut c_void,
@@ -215,7 +229,7 @@ fn frame(tx: *mut lenny_session, data: &[u8], pts: i64, orientation: u8, flags: 
 
 #[test]
 fn abi_version() {
-    assert_eq!(lenny_abi_version(), (1 << 16) | 2);
+    assert_eq!(lenny_abi_version(), (1 << 16) | 3);
 }
 
 #[test]
@@ -403,6 +417,7 @@ fn slow_network_drops_to_keyframe_and_lowers_bitrate_without_blocking() {
         exposure_comp_min: 0,
         exposure_comp_max: 0,
         exposure_comp_step_milli: 0,
+        lens_caps: null(),
     };
     let scb = lenny_sender_callbacks {
         user: &txs as *const Tx as *mut c_void,
@@ -680,6 +695,8 @@ fn struct_layouts_match_header() {
     o!(lenny_control_state, zoom);
     o!(lenny_control_state, battery);
     o!(lenny_control_state, charging);
+    o!(lenny_control_state, pan_x);
+    o!(lenny_control_state, pan_y);
     s!(lenny_video_frame);
     o!(lenny_video_frame, frame_seq);
     o!(lenny_video_frame, pts_us);
@@ -714,6 +731,12 @@ fn struct_layouts_match_header() {
     o!(lenny_sender_config, exposure_comp_min);
     o!(lenny_sender_config, exposure_comp_max);
     o!(lenny_sender_config, exposure_comp_step_milli);
+    o!(lenny_sender_config, lens_caps);
+    s!(lenny_lens_caps);
+    o!(lenny_lens_caps, modes);
+    o!(lenny_lens_caps, mode_count);
+    o!(lenny_lens_caps, zoom_min);
+    o!(lenny_lens_caps, zoom_max);
     s!(lenny_sender_callbacks);
     o!(lenny_sender_callbacks, user);
     o!(lenny_sender_callbacks, on_state);
@@ -749,4 +772,86 @@ fn struct_layouts_match_header() {
     o!(lenny_peer_info, mode_count);
     o!(lenny_peer_info, modes);
     assert_eq!(out, include_str!("abi_layout_64.txt"));
+}
+
+#[test]
+fn per_lens_caps_pan_and_control_state_reach_the_receiver() {
+    use lenny_core::session::{ReceiverConfig, Session};
+    let rv = Recv::default();
+    let mut cb: lenny_receiver_callbacks = unsafe { std::mem::zeroed() };
+    cb.user = &rv as *const Recv as *mut c_void;
+    cb.on_stream_start = Some(rx_start);
+    cb.on_control_ack = Some(rx_ack);
+    // The desktop app uses the Rust API directly (no FFI); the phone goes through the C ABI.
+    let rx = Session::new_receiver(
+        ReceiverConfig {
+            identity: ident(0xDD, c"Desk", LENNY_PLATFORM_LINUX),
+            device_name: b"Desk".to_vec(),
+            app_version: vec![],
+            port: 0,
+            preferred: settings(1920, 1080, 8000),
+        },
+        cb,
+    );
+    assert!(rx.peer_caps().is_none());
+    rx.trust(&[0x81; 16]);
+    assert_eq!(rx.start(), LENNY_OK);
+    let sd = Send::default();
+    let tx = make_sender(&sd, 0x81);
+    connect(tx, rx.port(), null());
+    assert!(wait_for(|| rx.state() == LENNY_STATE_STREAMING as i32 && streaming(tx)));
+
+    let caps = rx.peer_caps().unwrap();
+    assert_eq!(caps.lenses[0].modes, MODES[..2].to_vec());
+    assert!(caps.lenses[0].zoom_min == 100 && caps.lenses[0].zoom_max == 800);
+    assert_eq!(caps.lenses[1].modes, MODES[..1].to_vec());
+
+    let mut pan = lenny_control { cmd: LENNY_CTL_PAN as u16, x: 50000, y: 32768, ..Default::default() };
+    assert_eq!(rx.send_control(&mut pan), LENNY_OK);
+    assert!(wait_for(|| rv.acks.load(SeqCst) == 1 && sd.focus_x.load(SeqCst) == 50000));
+
+    let cs = lenny_control_state { pan_x: 50000, pan_y: 1234, zoom: 250, ..Default::default() };
+    assert_eq!(unsafe { lenny_sender_send_control_state(tx, &cs) }, LENNY_OK);
+    assert!(wait_for(|| rx.control_state().1.pan_y == 1234));
+    destroy(tx);
+}
+
+/// A 1.0 phone (the C++ core before 1.1): pan is refused locally instead of sent, the rest works.
+#[test]
+fn pan_needs_a_1_1_phone() {
+    use lenny_core::wire::*;
+    use std::io::{Read, Write};
+    let rv = Recv::default();
+    let rx = make_receiver(&rv, 0);
+    trust(rx, 0x91);
+    let mut phone = std::net::TcpStream::connect(("127.0.0.1", unsafe { lenny_receiver_port(rx) })).unwrap();
+    let hello =
+        Hello { proto_minor: 0, role: 1, device_id: [0x91; 16], device_name: b"Old".to_vec(), ..Default::default() };
+    phone.write_all(&to_message(&hello, 0)).unwrap();
+    let caps = Caps { modes: MODES.to_vec(), controls: LENNY_CAP_PAN as u64, ..Default::default() };
+    phone.write_all(&to_message(&caps, 0)).unwrap();
+    // Read until CAPS_SELECT, then start streaming with what was asked.
+    let mut reader = MessageReader::default();
+    let mut buf = [0u8; 4096];
+    let sel = 'outer: loop {
+        let n = phone.read(&mut buf).unwrap();
+        assert!(n > 0);
+        reader.feed(&buf[..n]);
+        while let Status::Message(h, p) = reader.next() {
+            assert_eq!(h.ver_minor, 0); // everything after our HELLO uses the negotiated 1.0 (§3)
+            if h.typ == msg::HELLO {
+                assert_eq!(Hello::decode(p).unwrap().proto_minor, 1); // while announcing its own 1.1
+            }
+            if h.typ == msg::CAPS_SELECT {
+                break 'outer CapsSelect::decode(p).unwrap();
+            }
+        }
+    };
+    phone.write_all(&to_message(&StreamStart(sel.0), 0)).unwrap();
+    assert!(wait_for(|| streaming(rx)));
+    let mut pan = lenny_control { cmd: LENNY_CTL_PAN as u16, x: 1, y: 1, ..Default::default() };
+    assert_eq!(unsafe { lenny_receiver_send_control(rx, &mut pan) }, LENNY_E_STATE);
+    let mut key = lenny_control { cmd: LENNY_CTL_KEYFRAME_REQUEST as u16, ..Default::default() };
+    assert_eq!(unsafe { lenny_receiver_send_control(rx, &mut key) }, LENNY_OK);
+    destroy(rx);
 }

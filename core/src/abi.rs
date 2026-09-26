@@ -5,7 +5,7 @@
 use std::os::raw::{c_char, c_void};
 
 pub const LENNY_ABI_VERSION_MAJOR: u32 = 1;
-pub const LENNY_ABI_VERSION_MINOR: u32 = 2;
+pub const LENNY_ABI_VERSION_MINOR: u32 = 3;
 pub const LENNY_DEFAULT_PORT: u16 = 47474;
 pub const LENNY_DEVICE_ID_SIZE: usize = 16;
 pub const LENNY_PAIR_TOKEN_SIZE: usize = 16;
@@ -97,6 +97,7 @@ pub enum lenny_control_cmd {
     LENNY_CTL_SELECT_LENS = 18,
     LENNY_CTL_ZOOM = 19,
     LENNY_CTL_RESET_AUTO = 20,
+    LENNY_CTL_PAN = 21,
 }
 pub use lenny_control_cmd::*;
 
@@ -109,6 +110,7 @@ pub const LENNY_CAP_WB_LOCK: u32 = 1 << 4;
 pub const LENNY_CAP_TORCH: u32 = 1 << 5;
 pub const LENNY_CAP_LENS: u32 = 1 << 6;
 pub const LENNY_CAP_ZOOM: u32 = 1 << 7;
+pub const LENNY_CAP_PAN: u32 = 1 << 8;
 
 pub const LENNY_ACK_OK: i32 = 0;
 pub const LENNY_ACK_UNSUPPORTED: i32 = 1;
@@ -137,6 +139,8 @@ pub struct lenny_control_state {
     pub zoom: u16,
     pub battery: u8,
     pub charging: u8,
+    pub pan_x: u16,
+    pub pan_y: u16,
 }
 
 // STREAM_STATUS states.
@@ -218,6 +222,17 @@ pub struct lenny_sender_config {
     pub exposure_comp_min: i32,
     pub exposure_comp_max: i32,
     pub exposure_comp_step_milli: u32,
+    pub lens_caps: *const lenny_lens_caps,
+}
+
+/// Per-lens capabilities (ABI 1.3), parallel to lenny_sender_config.lenses.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct lenny_lens_caps {
+    pub modes: *const lenny_mode,
+    pub mode_count: usize,
+    pub zoom_min: u16,
+    pub zoom_max: u16,
 }
 
 #[repr(C)]

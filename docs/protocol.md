@@ -1,6 +1,6 @@
 # Lenny Wire Protocol
 
-Protocol version: **1.0** (draft, pre-M1). Status: **for review**.
+Protocol version: **1.1**. Status: **for review**.
 Test vectors live in `/protocol/vectors/` (added in M1). This file is the spec.
 
 ## 1. Principles
@@ -152,8 +152,16 @@ lenny://c?v=1&h=192.168.1.20,192.168.42.129&p=47474&t=<22-char base64url>&n=<url
 | 2 | mode | list, repeated: {1 width u16, 2 height u16, 3 fps_num u16, 4 fps_den u16} |
 | 3 | max_bitrate_kbps | u32 |
 | 4 | controls | u64 bitmask (§6.9) |
-| 5 | lenses | list, repeated: {1 lens_id u8, 2 facing u8 (0 back, 1 front, 2 external), 3 label str} |
+| 5 | lenses | list, repeated: {1 lens_id u8, 2 facing u8 (0 back, 1 front, 2 external), 3 label str, 4 mode (1.1), 5 zoom_range (1.1)} |
 | 6 | exposure_comp_range | list {1 min i32, 2 max i32, 3 step_milli u32} (EV × 1000) |
+
+Lens sub-fields since 1.1 (a 1.0 receiver skips them):
+- `4 mode`: repeated, same shape as tag 2. The modes **this lens** can stream. Phones differ per lens (the front camera
+  often tops out below the back one), so a receiver offers only the selected lens's modes and never a mode that would
+  fall back when streaming starts. No tag 4 = the CAPS-level modes (tag 2), which stay the default lens's modes for 1.0
+  receivers.
+- `5 zoom_range`: list {1 min u16, 2 max u16}, ratio × 100 relative to this lens, the range CONTROL `zoom` accepts
+  (min may be below 100 on a logical multi-camera, where zooming out selects the ultrawide sensor).
 
 ### 6.6 CAPS_SELECT (0x0021) — receiver's choice
 Tag 1 codec_id u8, 2 width u16, 3 height u16, 4 fps_num u16, 5 fps_den u16, 6 bitrate_kbps u32,
@@ -194,7 +202,7 @@ CONTROL payload: tag 1 `req_id` u32, then exactly one command tag:
 | Tag | Command | Value | Controls bit |
 |---|---|---|---|
 | 10 | keyframe_request | (empty) | always |
-| 11 | focus_at | {1 x u16, 2 y u16} normalized 0–65535, upright image coords | 0 |
+| 11 | focus_at | {1 x u16, 2 y u16} normalized 0–65535, upright image coords. Focuses there and **holds** (Manual mode) until focus_auto or reset_auto | 0 |
 | 12 | focus_lock | u8 bool | 1 |
 | 13 | focus_auto | (empty) — back to continuous AF | 0 |
 | 14 | exposure_comp | i32 EV×1000 (0 = auto, no bias) | 2 |
@@ -204,15 +212,26 @@ CONTROL payload: tag 1 `req_id` u32, then exactly one command tag:
 | 18 | select_lens | u8 lens_id | 6 |
 | 19 | zoom | u16 ratio×100 | 7 |
 | 20 | reset_auto | (empty) — everything back to Auto | always |
+| 21 | pan (1.1) | {1 x u16, 2 y u16}: where the zoomed crop sits, 0–65535 across the pannable range per axis, 32768 = centred, upright image coords | 8 |
+
+**Pan (1.1).** Zoom and pan happen on the camera, not on finished frames: zoom is `CONTROL_ZOOM_RATIO` (so a logical
+multi-camera switches sensors itself), pan moves `SCALER_CROP_REGION` over the lens's full field of view. At zoom Z
+(relative to the lens, Z > 1) the visible crop is 1/Z of the field of view per axis; pan 0 puts it against the left
+(top) edge, 65535 against the right (bottom) edge. At Z ≤ 1 there's nothing to pan and it's ignored. A receiver that
+drags the picture by d (fraction of the visible width) changes pan by −d · (1/Z) / (1 − 1/Z) · 65535. Sent only when
+the negotiated minor is ≥ 1.
 
 CONTROL_ACK: tag 1 `req_id`, tag 2 `result` u8 (0 OK, 1 UNSUPPORTED, 2 FAILED, 3 BUSY).
 CONTROL_STATE: full current state, sent after STREAM_START, after every change, and on reconnect:
 1 af_mode u8 (0 continuous, 1 locked, 2 focusing), 2 exposure_comp i32, 3 exposure_lock u8,
 4 wb_lock u8, 5 torch u8, 6 lens_id u8, 7 zoom u16, 8 battery u8 (percent, 255 unknown; absent = unknown),
-9 charging u8 bool. The phone also resends it every 60 s so the battery level stays current (1.2).
+9 charging u8 bool, 10 pan_x u16 (1.1), 11 pan_y u16 (1.1; both 32768 when absent). The phone also resends it every
+60 s so the battery level stays current.
 
-**Default state is Auto.** Every session starts with continuous AF, AE on, AWB auto, EV 0, torch off.
-Only the phone's own UI locks survive a reconnect (the phone re-applies them and reports via CONTROL_STATE).
+**Default state is Auto.** Every connect and every reconnect starts with continuous AF, AE on, AWB auto, EV 0, torch
+off, zoom 1×, pan centred, whichever side set them before. The UIs show two modes: **Auto** (nothing manual) and
+**Manual** (tap-to-focus, which holds, plus exposure compensation and exposure lock); going back to Auto sends
+`reset_auto`. A settings change mid-stream (CAPS_SELECT) keeps the current controls.
 
 ### 6.10 STATS (0x0050)
 Optional, every 1 s. Tag 1 `encoded_fps_x100` u32, 2 `bitrate_kbps` u32, 3 `dropped_frames` u32,
@@ -265,4 +284,8 @@ HELLO from a sender, protocol 1.0, minimal:
 (5 + 5 + 5 + 20 + 7 = 42.) Binary test vectors with expected decodes ship in `/protocol/vectors/` in M1.
 
 ## 11. Change log
-- 1.0 (draft) — initial.
+- 1.0 (draft) — initial. CONTROL_STATE battery/charging (tags 8, 9) were added later without a version bump; absent
+  = unknown.
+- 1.1 — CAPS lens entries carry their own modes and zoom range; CONTROL `pan` (21) and controls bit 8; CONTROL_STATE
+  pan_x/pan_y (10, 11); focus_at holds until Auto; controls reset to Auto on every reconnect. Test vectors
+  `control_pan.hex`, `caps_lens_1_1.hex`.

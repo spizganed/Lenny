@@ -170,8 +170,7 @@ QR flow work.
 Reconnect: sender retries with backoff of 250 ms, 500 ms, 1 s, then 2 s repeated
 until the user cancels. The receiver keeps the vcam alive on the placeholder frame
 during this time. On reconnect the sender always sends a fresh keyframe and the
-default **Auto** control state (plus whatever manual overlays the user had locked,
-which the phone keeps).
+default **Auto** control state (protocol.md §6.9: every connect and reconnect starts in Auto).
 
 ## 6. Android sender
 

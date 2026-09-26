@@ -65,7 +65,25 @@ pub unsafe extern "C" fn lenny_sender_create(
             controls: c.controls,
             lenses: lenses
                 .iter()
-                .map(|l| wire::Lens { id: l.lens_id, facing: l.facing, label: cstr(l.label) })
+                .enumerate()
+                .map(|(i, l)| {
+                    // ABI 1.3: optional per-lens caps, parallel to `lenses`.
+                    let lc = if c.lens_caps.is_null() { None } else { Some(&*c.lens_caps.add(i)) };
+                    let modes = match lc {
+                        Some(lc) if lc.mode_count != 0 && !lc.modes.is_null() => {
+                            std::slice::from_raw_parts(lc.modes, lc.mode_count).to_vec()
+                        }
+                        _ => vec![],
+                    };
+                    wire::Lens {
+                        id: l.lens_id,
+                        facing: l.facing,
+                        label: cstr(l.label),
+                        modes,
+                        zoom_min: lc.map_or(0, |lc| lc.zoom_min),
+                        zoom_max: lc.map_or(0, |lc| lc.zoom_max),
+                    }
+                })
                 .collect(),
             exposure_comp_min: c.exposure_comp_min,
             exposure_comp_max: c.exposure_comp_max,

@@ -17,7 +17,7 @@ int main(void) {
     S(lenny_control_state); O(lenny_control_state, af_mode); O(lenny_control_state, exposure_comp);
     O(lenny_control_state, exposure_lock); O(lenny_control_state, wb_lock); O(lenny_control_state, torch);
     O(lenny_control_state, lens_id); O(lenny_control_state, zoom); O(lenny_control_state, battery);
-    O(lenny_control_state, charging);
+    O(lenny_control_state, charging); O(lenny_control_state, pan_x); O(lenny_control_state, pan_y);
     S(lenny_video_frame); O(lenny_video_frame, frame_seq); O(lenny_video_frame, pts_us);
     O(lenny_video_frame, local_pts_us); O(lenny_video_frame, orientation); O(lenny_video_frame, flags);
     O(lenny_video_frame, data); O(lenny_video_frame, size);
@@ -30,6 +30,9 @@ int main(void) {
     O(lenny_sender_config, mode_count); O(lenny_sender_config, max_bitrate_kbps); O(lenny_sender_config, controls);
     O(lenny_sender_config, lenses); O(lenny_sender_config, lens_count); O(lenny_sender_config, exposure_comp_min);
     O(lenny_sender_config, exposure_comp_max); O(lenny_sender_config, exposure_comp_step_milli);
+    O(lenny_sender_config, lens_caps);
+    S(lenny_lens_caps); O(lenny_lens_caps, modes); O(lenny_lens_caps, mode_count); O(lenny_lens_caps, zoom_min);
+    O(lenny_lens_caps, zoom_max);
     S(lenny_sender_callbacks); O(lenny_sender_callbacks, user); O(lenny_sender_callbacks, on_state);
     O(lenny_sender_callbacks, on_stream_config); O(lenny_sender_callbacks, on_control);
     O(lenny_sender_callbacks, on_bitrate);
