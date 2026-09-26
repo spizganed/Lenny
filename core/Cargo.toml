@@ -1,0 +1,23 @@
+[package]
+name = "lenny_core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+description = "Lenny core: wire protocol, session state machine, transport. Stable C ABI in include/lenny/lenny.h."
+license = "UNLICENSED"
+publish = false
+
+[lib]
+# rlib: Rust callers (desktop app, probe, tests). cdylib: Android/Dart FFI (liblenny_core.so). staticlib: C/C++ linking.
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[dependencies]
+getrandom = "0.2"
+socket2 = "0.5"
+
+[[bin]]
+name = "lenny_probe"
+path = "src/bin/lenny_probe.rs"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

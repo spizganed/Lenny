@@ -37,3 +37,6 @@ GoogleService-Info.plist
 
 # Personal scratch space (screenshots, notes): never commit
 local/
+
+# Rust
+/target/

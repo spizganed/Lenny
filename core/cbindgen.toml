@@ -1,0 +1,23 @@
+# Regenerates the C header from src/abi.rs + src/c_api.rs. Used by tools/abi_check.sh to prove the Rust ABI matches
+# include/lenny/lenny.h; the hand-written header (with its docs) stays the published one.
+language = "C"
+style = "type"
+include_guard = "LENNY_GENERATED_H"
+sys_includes = ["stddef.h", "stdint.h"]
+no_includes = true
+cpp_compat = true
+usize_is_size_t = true
+
+[export]
+include = ["lenny_state", "lenny_control_cmd", "lenny_event"]
+# Rust-internal constants (wire format, pairing): public to Rust code and tests, not part of the C ABI.
+exclude = ["DEFAULT_TTL_US", "MAX_TOKENS", "MAGIC0", "MAGIC1", "VERSION_MAJOR", "VERSION_MINOR", "HEADER_SIZE",
+           "MAX_VIDEO_PAYLOAD", "MAX_CONTROL_PAYLOAD", "VIDEO_FRAME_META_SIZE", "HELLO", "GOODBYE", "PING", "PONG",
+           "PAIR_REQUEST", "PAIR_RESULT", "CAPS", "CAPS_SELECT", "STREAM_START", "STREAM_STATUS", "VIDEO_CONFIG",
+           "VIDEO_FRAME", "CONTROL", "CONTROL_STATE", "CONTROL_ACK"]
+
+[enum]
+rename_variants = "None"
+
+[parse]
+parse_deps = false
