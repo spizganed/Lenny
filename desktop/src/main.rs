@@ -3,10 +3,21 @@
 //! Usage: lenny-desktop [--port N] [--screenshot out.png [--after SECONDS]] [--size WxH]
 //!   --screenshot renders the window, saves it after SECONDS (default 3) and quits (docs, smoke test under Xvfb).
 
+// Release builds on Windows have no console window; the log goes to %APPDATA%\Lenny\lenny.log instead.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use lenny_desktop::ui;
 
 fn main() -> eframe::Result {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    let mut logger = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
+    #[cfg(all(windows, not(debug_assertions)))]
+    if let Some(f) = lenny_desktop::receiver::config_dir().and_then(|d| {
+        std::fs::create_dir_all(&d).ok()?;
+        std::fs::File::create(d.join("lenny.log")).ok()
+    }) {
+        logger.target(env_logger::Target::Pipe(Box::new(f)));
+    }
+    logger.init();
     let args: Vec<String> = std::env::args().collect();
     let arg = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
     let port = arg("--port").and_then(|p| p.parse().ok()).unwrap_or(lenny_core::LENNY_DEFAULT_PORT);

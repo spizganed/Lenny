@@ -56,8 +56,9 @@ Status (2026-09-26, end of the cloud session):
 - **Android**: per-lens camera discovery, capture-level zoom/pan, Auto/Manual
   modes, all on Camera2. APK builds with the Rust core via cargo-ndk. Real
   camera behaviour (AF, exposure, lenses) is untested — needs a real phone.
-- **Windows**: virtual camera backends written, with in-process tests in the CI `windows` job; not yet run against real apps
-  (Handoff step 2). Desktop app not built on Windows yet.
+- **Windows** (2026-09-27): both virtual cameras live on Win11 (Edge getUserMedia via MF and DirectShow, OpenCV
+  DirectShow, real phone), broker service (ADR-0009), NSIS installer + uninstaller (`installer\build.ps1`,
+  ADR-0008). Zoom/Teams/Discord/OBS by hand and Win10 not run yet (testing.md Windows table).
 
 ## Handoff: next session runs on the Windows PC (CLI agent)
 
@@ -93,29 +94,58 @@ Do these in order:
      registration ("Lenny (Classic)" on Win11, "Lenny" on Win10; MF "Lenny").
      Every COM entry and both streaming threads run in `catch_unwind`, and a
      panic switches to placeholder-only.
-   Still to do, in order:
-   - Build and `regsvr32` both DLLs (x64, plus x86 from SysWOW64), run
-     `lenny-desktop` with the fake phone, and check the camera in OBS, Chrome/Edge,
-     Zoom, Teams and Discord on Win10 **and** Win11. Fill in the Windows table
-     in `docs/testing.md`. Expect bugs: this is COM code that has never run
-     against real consumers.
-   - `Global\` for a standard user: the broker service (§7.3) is not written.
-     Without it the app falls back to `Local\`, which works for the DirectShow
-     filter in the same session. The MF camera (Frame Server, session 0) then
-     only shows the placeholder. Decide broker vs. alternative in an ADR.
+   **Done 2026-09-27:** both cameras live on Win11 with a real phone, broker service `lenny-broker` (ADR-0009),
+   NSIS installer/uninstaller (`installer\build.ps1` → `target\Lenny-Setup-<ver>.exe`), static CRT
+   (`.cargo/config.toml`), release desktop logs to `%APPDATA%\Lenny\lenny.log`. Lessons: Frame Server can't read
+   DLLs under a user profile (MF `Start` → access denied); consumers keep the DLL loaded after enumeration; home
+   Wi-Fi is usually "Public" (firewall rule is app-scoped, all profiles).
+   Still to do:
+   - OBS, Zoom, Teams, Discord in a real call; a 32-bit consumer; Win10; a true standard account. Friend's PC.
    - The DirectShow side is Win10's only camera and must work alone. The MF side
      is Win11 only. If both show up in MF-aware apps, revisit naming (R5).
    - One size (1280×720). Add 1080p once the desktop writes a 1080p canvas.
 3. **Then:** build `lenny_desktop` on Windows (expected to work as-is: winit
    chrome, openh264 from source), retire the Flutter desktop +
    `plugins/windows_receiver` once the Rust app has the Windows camera
-   (ADR), WiX installer per ADR-0004 (registers both backends).
+   (ADR). (Desktop builds on Windows and the installer exist as of 2026-09-27.)
 
 Loose ends: design fonts not committed (drop OFL TTFs in
 `desktop/assets/fonts`, see `theme.rs`); openh264 rejects frames over 1 MB
 (check 4K keyframes); the Android encoder doesn't request a profile (Baseline
 by default, which openh264 needs); `core/CMakeLists.txt` cargo wrapper never
-built on Windows; `lenny-prompt.md` can be deleted.
+built on Windows.
+
+Open from the user's change list (checked against the code 2026-09-27; the
+Rust desktop is the target, the Flutter desktop is not worth changing):
+- Desktop connection card: IPs/port are shown by default under the QR. Wanted:
+  QR only; the other methods (manual IP, USB ADB, USB tethering) behind one
+  roll-out button, each showing only what it needs; a button to hide IPs again.
+  The Rust desktop has no USB/ADB section at all yet (§7.5 describes it).
+- Known devices: the desktop lists known phones, but a click can't connect
+  (the phone always connects to the PC, ADR-0001), so quick connect belongs on
+  the phone. The phone has no known-PCs list, only the last PC prefilled.
+  Wanted: a list below the connection buttons, tap = connect, at least the last PC.
+- Phone: still has a "Connect" button and shows manual IP next to Scan/Find.
+  Wanted: same roll-out flow as the desktop, only "Disconnect" while connected.
+- Preview box: the list asked for a fixed-size box that 16:9 fills fully;
+  Task 6 built the opposite (box follows the video's aspect). Ask the user
+  which one before changing it.
+- Lock screen streaming: foreground service exists, never tested (testing.md
+  M2 row 9). Digital zoom fallback: not needed on Android (every Camera2
+  device can crop via `SCALER_CROP_REGION`); revisit for iOS.
+
+Free-forever check (2026-09-27; the user never wants to pay fees): all 409
+Rust crates are permissive (MIT/Apache/BSD/Zlib/ISC/Unicode-3.0), Flutter and
+Android deps too, NSIS is zlib (ADR-0008), GitHub Actions is free for public
+repos. Watch:
+- No LICENSE file: the public repo isn't legally open source until one is added.
+- H.264 patents: openh264 built from source isn't covered by Cisco's royalty
+  payment (only Cisco's prebuilt binary is). Via LA has a free tier (first
+  100k units/year), and Windows' own MF decoder is licensed with the OS, so
+  prefer MF decode on Windows; Linux can load Cisco's binary at runtime.
+- Bundled `adb.exe`: platform-tools binaries come under the Android SDK
+  licence, not plain Apache 2.0. Prefer the user's adb, or build it from AOSP.
+- Google Play: one-time $25 developer fee when publishing the Android app.
 
 Checks before any push: `cargo fmt --all --check`, `cargo clippy --workspace
 --all-targets -- -D warnings` (CI uses the latest stable, whose lints are
@@ -179,9 +209,6 @@ boundaries.
 
 ## Repo hygiene
 
-- `lenny-prompt.md` at the repo root is a historical one-time kickoff prompt,
-  not standing instructions — this file (CLAUDE.md) replaced it. Safe to
-  delete once its content is confirmed covered here and in `docs/`.
 - One ADR per real decision in `docs/adr/`. Superseded ADRs stay in the repo
   (marked superseded), never deleted — they're the record of why we changed
   course.

@@ -80,7 +80,7 @@ fed from the same decoded NV12 frames.
   qr_scan/                one-off QR scan (Android), see §8
 /protocol   protocol spec source-of-truth pointer + binary test vectors
 /ios /linux               README only (future work)
-/installer  WiX project (see ADR-0004)
+/installer  NSIS script (see ADR-0008)
 /docs       architecture.md, protocol.md, testing.md, compat-matrix.md, adr/
 ```
 
@@ -237,7 +237,7 @@ and the vcam shows the last good frame for ≤ 500 ms, then the placeholder.
   `LOCAL SERVICE`), in session 0. Session-local names are invisible there.
 - Creating `Global\` objects needs `SeCreateGlobalPrivilege`, which normal user processes
   don't have. The object is therefore created by a small **Lenny broker service** (LocalSystem,
-  installed by the installer, start on demand). The receiver app and both vcam backends open it.
+  installed by the installer, auto start; ADR-0009). The receiver app and both vcam backends open it.
   The DACL grants: SYSTEM full, Administrators full, INTERACTIVE read/write, LOCAL SERVICE read,
   plus Low-IL read label so sandboxed consumers (Chrome's renderer is not the loader,
   but some apps run at low IL) can map it. *OS quirk: this is exactly what OBS works around too;
@@ -257,8 +257,10 @@ and the vcam shows the last good frame for ≤ 500 ms, then the placeholder.
 
 ### 7.4 Virtual camera backends
 Implementation (Phase B): both live in one Rust COM DLL, `vcam/com` (`lenny_vcam_com.dll`, x64 and x86, windows-rs, no
-lenny_core). The writer is `lenny_vcam::WindowsCamera` in the desktop app. No broker service yet: the app creates
-`Global\` names when it may, else falls back to `Local\`, which the DirectShow filter sees and Frame Server doesn't.
+lenny_core). The writer is `lenny_vcam::WindowsCamera` in the desktop app. The broker is `lenny-broker.exe`
+(`vcam/src/bin`, ADR-0009; auto start, not on demand): the app opens its `Global\` objects, else creates `Global\` itself
+(elevated), else falls back to `Local\`, which the DirectShow filter sees and Frame Server doesn't. Frame Server also
+needs to read the DLL: install it outside user profiles (Program Files), or `Start` fails with access denied.
 The C++/plugin wording below is the original plan; the design (shm, crash containment, naming) carries over as is.
 
 Both read the same shared memory, and both do their own scale/letterbox and color convert

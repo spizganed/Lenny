@@ -318,7 +318,10 @@ fn decode_loop(rx: Receiver<Packet>, s: Arc<Shared>, session: Arc<Session>) {
             last_key_request = Instant::now();
         }
     };
+    // Timing summary in the log every 5 s while video flows (what "laggy" means on someone else's PC).
+    let mut vl = VideoLog::default();
     while let Ok(p) = rx.recv() {
+        vl.report(&session);
         match p {
             Packet::Stop => return,
             // SPS/PPS: the decoder keeps them for the frames that follow.
@@ -328,13 +331,18 @@ fn decode_loop(rx: Receiver<Packet>, s: Arc<Shared>, session: Arc<Session>) {
                 }
             }
             Packet::Frame { data, orientation, key } => {
+                vl.arrived(key, data.len());
                 if s.want_keyframe.load(Relaxed) {
                     need_key = true;
                 }
                 if need_key && !key {
+                    vl.skipped += 1;
                     continue; // P-frames before the next keyframe would decode as garbage
                 }
-                match dec.decode(&data) {
+                let t0 = Instant::now();
+                let decoded = dec.decode(&data);
+                vl.decoded(t0.elapsed());
+                match decoded {
                     Ok(Some(yuv)) => {
                         need_key = false;
                         let (w, h) = yuv.dimensions();
@@ -348,7 +356,9 @@ fn decode_loop(rx: Receiver<Packet>, s: Arc<Shared>, session: Arc<Session>) {
                             width: w,
                             height: h,
                         };
+                        let t0 = Instant::now();
                         present(&s, &pic, orientation, &mut canvas);
+                        vl.presented(t0.elapsed());
                     }
                     Ok(None) => {}
                     Err(e) => {
@@ -360,6 +370,62 @@ fn decode_loop(rx: Receiver<Packet>, s: Arc<Shared>, session: Arc<Session>) {
                 }
             }
         }
+    }
+}
+
+/// Video timing for the log, summed over 5 s: averages hide the stalls people notice, so it keeps the worst too.
+#[derive(Default)]
+struct VideoLog {
+    since: Option<Instant>,
+    last_arrival: Option<Instant>,
+    frames: u32,
+    skipped: u32,
+    keys: u32,
+    max_bytes: usize,
+    max_gap: Duration,
+    dec: (Duration, Duration),     // (sum, max)
+    present: (Duration, Duration), // (sum, max)
+}
+
+impl VideoLog {
+    fn arrived(&mut self, key: bool, bytes: usize) {
+        let now = Instant::now();
+        if let Some(t) = self.last_arrival {
+            self.max_gap = self.max_gap.max(now - t);
+        }
+        self.last_arrival = Some(now);
+        self.since.get_or_insert(now);
+        self.frames += 1;
+        self.keys += key as u32;
+        self.max_bytes = self.max_bytes.max(bytes);
+    }
+    fn decoded(&mut self, d: Duration) {
+        self.dec = (self.dec.0 + d, self.dec.1.max(d));
+    }
+    fn presented(&mut self, d: Duration) {
+        self.present = (self.present.0 + d, self.present.1.max(d));
+    }
+    fn report(&mut self, session: &Session) {
+        let Some(since) = self.since.filter(|t| t.elapsed() >= Duration::from_secs(5)) else { return };
+        let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+        let n = self.frames.max(1) as f64;
+        let st = session.stats();
+        log::info!(
+            "video: {:.1} fps, {} keyframes, largest frame {} KB, longest gap {:.0} ms, decode {:.1}/{:.1} ms, \
+             present {:.1}/{:.1} ms (avg/max), {} skipped for a keyframe, latency {} ms, rtt {} ms",
+            self.frames as f64 / since.elapsed().as_secs_f64(),
+            self.keys,
+            self.max_bytes / 1024,
+            ms(self.max_gap),
+            ms(self.dec.0) / n,
+            ms(self.dec.1),
+            ms(self.present.0) / n,
+            ms(self.present.1),
+            self.skipped,
+            st.latency_us / 1000,
+            st.rtt_us / 1000,
+        );
+        *self = VideoLog { last_arrival: self.last_arrival, ..Default::default() };
     }
 }
 
@@ -518,13 +584,17 @@ pub fn c_chars(b: &[c_char]) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
-fn known_path() -> Option<PathBuf> {
-    let base = std::env::var_os("LENNY_CONFIG_DIR")
+/// Per-user settings folder (known phones; the log on Windows release builds).
+pub fn config_dir() -> Option<PathBuf> {
+    std::env::var_os("LENNY_CONFIG_DIR")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("XDG_CONFIG_HOME").map(|d| PathBuf::from(d).join("lenny")))
         .or_else(|| std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("Lenny")))
-        .or_else(|| std::env::var_os("HOME").map(|d| PathBuf::from(d).join(".config/lenny")))?;
-    Some(base.join("known_phones.txt"))
+        .or_else(|| std::env::var_os("HOME").map(|d| PathBuf::from(d).join(".config/lenny")))
+}
+
+fn known_path() -> Option<PathBuf> {
+    Some(config_dir()?.join("known_phones.txt"))
 }
 
 /// "<32 hex chars> <name>" per line.

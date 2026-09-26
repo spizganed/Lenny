@@ -104,19 +104,29 @@ Linux testing needs a different VM setup (e.g. Hyper-V itself); not done yet.
 
 ## Windows virtual cameras (Rust, `vcam/com`)
 
-Not run yet: written in the cloud sandbox; only the in-process CI tests have exercised it.
+Last run: 2026-09-27, Windows 11 Pro (26200), installed with `installer\build.ps1` → `Lenny-Setup-0.1.0.exe`, fake phone
+and Nothing Phone (3a) over Wi-Fi, app started unelevated (Start menu / explorer) with the broker service running.
+Consumers driven by script: OpenCV (DirectShow) and headless Edge getUserMedia (Media Foundation); OBS, Zoom, Teams,
+Discord by hand still to do.
 
-Setup (elevated prompt): `cargo build --release -p lenny_vcam_com` and
-`cargo build --release -p lenny_vcam_com --target i686-pc-windows-msvc`, then `regsvr32 target\release\lenny_vcam_com.dll`
-and `%WINDIR%\SysWOW64\regsvr32 target\i686-pc-windows-msvc\release\lenny_vcam_com.dll`. Unregister with `/u`.
-Then `lenny-desktop` plus a phone or the fake phone.
+Setup: install with the setup exe (elevated). For development without the installer, copy both DLLs somewhere
+**outside your user profile** (e.g. `C:\Program Files\Lenny\` and `...\x86\`) before `regsvr32`: Frame Server runs as
+LOCAL SERVICE, can't read `C:\Users\<you>\...`, and `MFCreateVirtualCamera`'s `Start` then fails with
+`Access is denied (0x80070005)`. DirectShow works from anywhere. Consumers (browsers, Discord, Frame Server) keep the
+DLL loaded after enumerating cameras, so rebuilding it fails with "Access is denied": rename the old file first.
+
+Findings: Windows appends " (Windows Virtual Camera)" to the MF camera's name, so Edge lists "Lenny (Windows Virtual
+Camera)" and "Lenny (Classic)". Win11 also exposes the MF camera to DirectShow apps, so those see two Lenny devices too
+(R5). The MF camera exists only while the app runs (Session lifetime).
 
 | # | Step | Expected | Win10 | Win11 |
 |---|---|---|---|---|
-| 1 | Desktop app not running, open the camera in OBS | "Lenny" (Win11 also "Lenny (Classic)"), placeholder | | |
-| 2 | Start the app, phone streams | Live picture within 1 s, upright | | |
-| 3 | Quit the app while a consumer is open | Last frame ≤ 0.5 s, then placeholder; consumer doesn't crash | | |
-| 4 | Chrome/Edge getUserMedia (webcamtests.com) | Camera listed, live | | |
-| 5 | Zoom, Teams, Discord | Camera listed, live, call keeps running through app restarts | | |
-| 6 | 32-bit consumer (a 32-bit DirectShow app, e.g. AMCap x86) | Live | | |
-| 7 | Standard (non-admin) user | App falls back to `Local\`: DirectShow live; MF camera placeholder until the broker exists | | |
+| 1 | Desktop app not running, open the camera | "Lenny (Classic)" with the placeholder (MF camera gone: Session lifetime) | | ✅ DirectShow placeholder |
+| 2 | Start the app, phone streams | Live picture within 1 s, upright | | ✅ fake phone, both cameras 1280×720 |
+| 3 | Quit the app while a consumer is open | Last frame ≤ 0.5 s, then placeholder; consumer doesn't crash | | ✅ killed the app: last frame, placeholder after ~1.5 s (heartbeat 1 s + 0.5 s), consumer kept reading |
+| 4 | Chrome/Edge getUserMedia (webcamtests.com) | Camera listed, live | | ✅ headless Edge: both listed, live |
+| 5 | Zoom, Teams, Discord | Camera listed, live, call keeps running through app restarts | | Brave/Discord loaded the DLL on enumeration without crashing; not tried in a call |
+| 6 | 32-bit consumer (a 32-bit DirectShow app, e.g. AMCap x86) | Live | | x86 DLL registered; not run |
+| 7 | Unelevated app (normal launch) | Broker holds `Global\`: both cameras live | | ✅ admin account, unelevated token; a true standard account not tried |
+| 7b | Real phone streams to the installed app | Both cameras show the phone | | ✅ Nothing Phone (3a), Wi-Fi marked Public (needed the all-profiles firewall rule) |
+| 8 | Installer: install, upgrade over a running consumer, uninstall | Files, both COM registrations, broker service, firewall rule, shortcuts, Add/Remove entry; uninstall removes all (locked DLLs on reboot) | | ✅ silent `/S` install, reinstall, uninstall |

@@ -17,7 +17,7 @@ pub use null::NullVirtualCamera;
 #[cfg(target_os = "linux")]
 pub use v4l2::V4l2LoopbackCamera;
 #[cfg(windows)]
-pub use windows::WindowsCamera;
+pub use windows::{create_objects, WindowsCamera};
 
 pub type Result<T> = std::result::Result<T, String>;
 

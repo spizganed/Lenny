@@ -1,0 +1,4 @@
+# Static CRT on Windows: no VC++ redistributable needed on the target PC, including for the x86 camera DLL that
+# 32-bit apps load.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

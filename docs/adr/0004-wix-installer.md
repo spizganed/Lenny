@@ -1,6 +1,6 @@
 # ADR-0004: WiX (MSI) installer, not MSIX
 
-Status: proposed
+Status: superseded by ADR-0008 (NSIS), 2026-09-27.
 
 **Decision.** WiX Toolset v5, producing a per-machine MSI (wrapped in a Burn bundle only if a prerequisite like the VC++ runtime
 can't be linked statically).

@@ -15,11 +15,12 @@ use windows::Win32::Security::Authorization::{ConvertStringSecurityDescriptorToS
 use windows::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows::Win32::System::Memory::{
-    CreateFileMappingW, MapViewOfFile, UnmapViewOfFile, FILE_MAP_ALL_ACCESS, MEMORY_MAPPED_VIEW_ADDRESS, PAGE_READWRITE,
+    CreateFileMappingW, MapViewOfFile, OpenFileMappingW, UnmapViewOfFile, FILE_MAP_READ, FILE_MAP_WRITE,
+    MEMORY_MAPPED_VIEW_ADDRESS, PAGE_READWRITE,
 };
 use windows::Win32::System::Registry::{RegCloseKey, RegOpenKeyExW, HKEY, HKEY_CLASSES_ROOT, KEY_READ};
 use windows::Win32::System::SystemInformation::GetTickCount64;
-use windows::Win32::System::Threading::{CreateEventW, GetCurrentProcessId, SetEvent};
+use windows::Win32::System::Threading::{CreateEventW, GetCurrentProcessId, OpenEventW, SetEvent, EVENT_MODIFY_STATE};
 
 use crate::{FrameFormat, IVirtualCamera, Result};
 
@@ -55,52 +56,25 @@ impl WindowsCamera {
         }
     }
 
-    /// Creates the mapping + event, `Global\` first, `Local\` if this user can't (no SeCreateGlobalPrivilege and no
-    /// broker service yet: DirectShow consumers in this session still work, the MF camera doesn't).
+    /// Opens the broker service's `Global\` objects (architecture.md §7.3; opening needs no privilege, only creating
+    /// does), else creates them `Global\` (elevated), else `Local\` (DirectShow consumers in this session still work,
+    /// the MF camera doesn't).
     fn create_shared(&mut self) -> Result<()> {
-        let mut sd = PSECURITY_DESCRIPTOR::default();
-        unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(SDDL, SDDL_REVISION_1, &mut sd, None) }
-            .map_err(|e| format!("security descriptor: {e}"))?;
-        let sa = SECURITY_ATTRIBUTES {
-            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
-            lpSecurityDescriptor: sd.0,
-            bInheritHandle: false.into(),
-        };
-        let size = fb::mapping_bytes() as u64;
-        let mut last = String::new();
-        for (global, map_name, event_name) in
-            [(true, fb::MAPPING_NAME, fb::EVENT_NAME), (false, fb::LOCAL_MAPPING_NAME, fb::LOCAL_EVENT_NAME)]
-        {
-            let name = HSTRING::from(map_name);
-            let m = unsafe {
-                CreateFileMappingW(
-                    INVALID_HANDLE_VALUE,
-                    Some(&sa),
-                    PAGE_READWRITE,
-                    (size >> 32) as u32,
-                    size as u32,
-                    PCWSTR(name.as_ptr()),
-                )
-            };
-            match m {
-                Ok(m) => {
-                    let ev =
-                        unsafe { CreateEventW(Some(&sa), false, false, PCWSTR(HSTRING::from(event_name).as_ptr())) };
-                    self.mapping = m;
-                    self.event = ev.unwrap_or_default();
-                    self.global = global;
-                    break;
+        let (mapping, event, global) = match open_global() {
+            Some((m, e)) => (m, e, true),
+            None => match create_objects(fb::MAPPING_NAME, fb::EVENT_NAME) {
+                Ok((m, e)) => (m, e, true),
+                Err(g) => {
+                    let (m, e) = create_objects(fb::LOCAL_MAPPING_NAME, fb::LOCAL_EVENT_NAME)
+                        .map_err(|l| format!("can't create the shared frame buffer ({g}; {l})"))?;
+                    (m, e, false)
                 }
-                Err(e) => last = format!("{map_name}: {e}"),
-            }
-        }
-        unsafe {
-            let _ = LocalFree(Some(HLOCAL(sd.0)));
-        }
-        if self.mapping.is_invalid() {
-            return Err(format!("can't create the shared frame buffer ({last})"));
-        }
-        self.view = unsafe { MapViewOfFile(self.mapping, FILE_MAP_ALL_ACCESS, 0, 0, fb::mapping_bytes()) };
+            },
+        };
+        self.mapping = mapping;
+        self.event = event;
+        self.global = global;
+        self.view = unsafe { MapViewOfFile(self.mapping, FILE_MAP_WRITE, 0, 0, fb::mapping_bytes()) };
         if self.view.Value.is_null() {
             return Err(format!("MapViewOfFile: {:?}", unsafe { GetLastError() }));
         }
@@ -174,6 +148,49 @@ impl Default for WindowsCamera {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Creates the mapping + event under these names with the §7.3 DACL (or opens them if they exist). Used by the app and
+/// by the broker service (`lenny-broker`), which holds the `Global\` pair for apps without SeCreateGlobalPrivilege.
+pub fn create_objects(map_name: &str, event_name: &str) -> Result<(HANDLE, HANDLE)> {
+    let mut sd = PSECURITY_DESCRIPTOR::default();
+    unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(SDDL, SDDL_REVISION_1, &mut sd, None) }
+        .map_err(|e| format!("security descriptor: {e}"))?;
+    let sa = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: sd.0,
+        bInheritHandle: false.into(),
+    };
+    let size = fb::mapping_bytes() as u64;
+    let name = HSTRING::from(map_name);
+    let mapping = unsafe {
+        CreateFileMappingW(
+            INVALID_HANDLE_VALUE,
+            Some(&sa),
+            PAGE_READWRITE,
+            (size >> 32) as u32,
+            size as u32,
+            PCWSTR(name.as_ptr()),
+        )
+    };
+    let event = mapping
+        .as_ref()
+        .ok()
+        .map(|_| unsafe { CreateEventW(Some(&sa), false, false, PCWSTR(HSTRING::from(event_name).as_ptr())) });
+    unsafe {
+        let _ = LocalFree(Some(HLOCAL(sd.0)));
+    }
+    let mapping = mapping.map_err(|e| format!("{map_name}: {e}"))?;
+    Ok((mapping, event.and_then(|e| e.ok()).unwrap_or_default()))
+}
+
+/// The broker's `Global\` objects, if it runs.
+fn open_global() -> Option<(HANDLE, HANDLE)> {
+    let m = HSTRING::from(fb::MAPPING_NAME);
+    let e = HSTRING::from(fb::EVENT_NAME);
+    let mapping = unsafe { OpenFileMappingW((FILE_MAP_READ | FILE_MAP_WRITE).0, false, PCWSTR(m.as_ptr())) }.ok()?;
+    let event = unsafe { OpenEventW(EVENT_MODIFY_STATE, false, PCWSTR(e.as_ptr())) }.unwrap_or_default();
+    Some((mapping, event))
 }
 
 fn clsid_registered(clsid: &str) -> bool {
