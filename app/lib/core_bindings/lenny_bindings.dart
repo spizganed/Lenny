@@ -563,7 +563,7 @@ class LennyBindings {
 
 const int LENNY_ABI_VERSION_MAJOR = 1;
 
-const int LENNY_ABI_VERSION_MINOR = 2;
+const int LENNY_ABI_VERSION_MINOR = 3;
 
 const int LENNY_ACK_BUSY = 3;
 
@@ -582,6 +582,8 @@ const int LENNY_CAP_FOCUS = 1;
 const int LENNY_CAP_FOCUS_LOCK = 2;
 
 const int LENNY_CAP_LENS = 64;
+
+const int LENNY_CAP_PAN = 256;
 
 const int LENNY_CAP_TORCH = 32;
 
@@ -701,7 +703,8 @@ enum lenny_control_cmd {
   LENNY_CTL_TORCH(17),
   LENNY_CTL_SELECT_LENS(18),
   LENNY_CTL_ZOOM(19),
-  LENNY_CTL_RESET_AUTO(20);
+  LENNY_CTL_RESET_AUTO(20),
+  LENNY_CTL_PAN(21);
 
   final int value;
   const lenny_control_cmd(this.value);
@@ -718,6 +721,7 @@ enum lenny_control_cmd {
     18 => LENNY_CTL_SELECT_LENS,
     19 => LENNY_CTL_ZOOM,
     20 => LENNY_CTL_RESET_AUTO,
+    21 => LENNY_CTL_PAN,
     _ => throw ArgumentError('Unknown value for lenny_control_cmd: $value'),
   };
 }
@@ -750,6 +754,12 @@ final class lenny_control_state extends ffi.Struct {
   @ffi.Uint8()
   external int charging;
 
+  @ffi.Uint16()
+  external int pan_x;
+
+  @ffi.Uint16()
+  external int pan_y;
+
   static ffi.Pointer<lenny_control_state> $allocate(
     ffi.Allocator $allocator, {
     required int af_mode,
@@ -761,6 +771,8 @@ final class lenny_control_state extends ffi.Struct {
     required int zoom,
     required int battery,
     required int charging,
+    required int pan_x,
+    required int pan_y,
   }) => $allocator<lenny_control_state>()
     ..ref.af_mode = af_mode
     ..ref.exposure_comp = exposure_comp
@@ -770,7 +782,9 @@ final class lenny_control_state extends ffi.Struct {
     ..ref.lens_id = lens_id
     ..ref.zoom = zoom
     ..ref.battery = battery
-    ..ref.charging = charging;
+    ..ref.charging = charging
+    ..ref.pan_x = pan_x
+    ..ref.pan_y = pan_y;
 }
 
 enum lenny_event {
@@ -825,6 +839,31 @@ final class lenny_lens extends ffi.Struct {
     ..ref.lens_id = lens_id
     ..ref.facing = facing
     ..ref.label = label;
+}
+
+final class lenny_lens_caps extends ffi.Struct {
+  external ffi.Pointer<lenny_mode> modes;
+
+  @ffi.Size()
+  external int mode_count;
+
+  @ffi.Uint16()
+  external int zoom_min;
+
+  @ffi.Uint16()
+  external int zoom_max;
+
+  static ffi.Pointer<lenny_lens_caps> $allocate(
+    ffi.Allocator $allocator, {
+    required ffi.Pointer<lenny_mode> modes,
+    required int mode_count,
+    required int zoom_min,
+    required int zoom_max,
+  }) => $allocator<lenny_lens_caps>()
+    ..ref.modes = modes
+    ..ref.mode_count = mode_count
+    ..ref.zoom_min = zoom_min
+    ..ref.zoom_max = zoom_max;
 }
 
 final class lenny_mode extends ffi.Struct {
@@ -1198,6 +1237,8 @@ final class lenny_sender_config extends ffi.Struct {
 
   @ffi.Uint32()
   external int exposure_comp_step_milli;
+
+  external ffi.Pointer<lenny_lens_caps> lens_caps;
 }
 
 final class lenny_session extends ffi.Opaque {}

@@ -34,8 +34,8 @@ class CameraControls {
 
   bool get focusLocked => afMode == 1;
 
-  /// Everything on Auto, i.e. what "Auto" resets to.
-  bool get isAuto => afMode != 1 && exposureEvMilli == 0 && !aeLock && !awbLock;
+  /// Everything on Auto, i.e. what "Auto" resets to. A tap-to-focus (focusing or held) is Manual.
+  bool get isAuto => afMode == 0 && exposureEvMilli == 0 && !aeLock && !awbLock;
 }
 
 /// A camera command, as sent to lenny_control / the phone plugin.

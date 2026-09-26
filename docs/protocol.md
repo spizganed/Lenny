@@ -211,7 +211,7 @@ CONTROL payload: tag 1 `req_id` u32, then exactly one command tag:
 | 17 | torch | u8 bool | 5 |
 | 18 | select_lens | u8 lens_id | 6 |
 | 19 | zoom | u16 ratio×100 | 7 |
-| 20 | reset_auto | (empty) — everything back to Auto | always |
+| 20 | reset_auto | (empty) — focus, exposure and white balance back to Auto (continuous AF, EV 0, no locks). Lens, zoom, pan and torch stay | always |
 | 21 | pan (1.1) | {1 x u16, 2 y u16}: where the zoomed crop sits, 0–65535 across the pannable range per axis, 32768 = centred, upright image coords | 8 |
 
 **Pan (1.1).** Zoom and pan happen on the camera, not on finished frames: zoom is `CONTROL_ZOOM_RATIO` (so a logical

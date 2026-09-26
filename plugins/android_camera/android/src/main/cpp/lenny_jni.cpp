@@ -95,12 +95,13 @@ JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void*) {
     return JNI_VERSION_1_6;
 }
 
-// lenses = flat [id, facing, ...] with labels[i] for each; exposure = [min, max, step_milli] (EV*1000) or empty.
+// lenses = flat [id, facing, ...] with labels[i] for each; exposure = [min, max, step_milli] (EV*1000) or empty;
+// lens_caps = per lens [zoom_min, zoom_max, mode_count, w, h, fps_num, fps_den, ...] (lenny_lens_caps).
 JNIEXPORT jlong JNICALL Java_com_spizganed_android_1camera_LennyNative_create(
     JNIEnv* env, jclass, jbyteArray device_id, jstring name, jintArray modes, jint max_bitrate, jint controls,
-    jintArray lenses, jobjectArray lens_labels, jintArray exposure, jobject listener) {
+    jintArray lenses, jobjectArray lens_labels, jintArray exposure, jintArray lens_caps, jobject listener) {
     if (!device_id || env->GetArrayLength(device_id) != LENNY_DEVICE_ID_SIZE || !name || !modes || !listener ||
-        !lenses || !lens_labels || !exposure)
+        !lenses || !lens_labels || !exposure || !lens_caps)
         return 0;
     auto* ctx = new Ctx;
     jclass cls = env->GetObjectClass(listener);
@@ -144,6 +145,25 @@ JNIEXPORT jlong JNICALL Java_com_spizganed_android_1camera_LennyNative_create(
     env->ReleaseIntArrayElements(lenses, lv, JNI_ABORT);
     cfg.lenses = lens_list.data();
     cfg.lens_count = lens_list.size();
+
+    // Per-lens caps. Mode storage is sized up front so the pointers in lc stay valid.
+    std::vector<jint> cv(size_t(env->GetArrayLength(lens_caps)));
+    env->GetIntArrayRegion(lens_caps, 0, jsize(cv.size()), cv.data());
+    std::vector<lenny_mode> lens_modes(cv.size() / 4 + 1);
+    std::vector<lenny_lens_caps> lc;
+    size_t at = 0, used = 0;
+    for (size_t i = 0; i < lens_list.size() && at + 3 <= cv.size(); ++i) {
+        const size_t count = size_t(cv[at + 2]);
+        if (count > (cv.size() - at - 3) / 4) break;  // malformed: stop, the core treats missing lenses as "no info"
+        lenny_lens_caps c{lens_modes.data() + used, count, uint16_t(cv[at]), uint16_t(cv[at + 1])};
+        for (size_t k = 0; k < count; ++k) {
+            const jint* m = &cv[at + 3 + 4 * k];
+            lens_modes[used++] = {uint16_t(m[0]), uint16_t(m[1]), uint16_t(m[2]), uint16_t(m[3])};
+        }
+        lc.push_back(c);
+        at += 3 + 4 * count;
+    }
+    if (lc.size() == lens_list.size()) cfg.lens_caps = lc.data();
     if (env->GetArrayLength(exposure) == 3) {
         jint ev[3];
         env->GetIntArrayRegion(exposure, 0, 3, ev);
@@ -212,14 +232,14 @@ JNIEXPORT jint JNICALL Java_com_spizganed_android_1camera_LennyNative_updateStre
     return lenny_sender_update_stream(ctx_of(h)->session, &s);
 }
 
-// state = [afMode, exposureComp, exposureLock, wbLock, torch, lensId, zoom, battery, charging]
+// state = [afMode, exposureComp, exposureLock, wbLock, torch, lensId, zoom, battery, charging, panX, panY]
 JNIEXPORT jint JNICALL Java_com_spizganed_android_1camera_LennyNative_sendControlState(JNIEnv* env, jclass, jlong h,
                                                                                       jintArray state) {
-    if (!h || !state || env->GetArrayLength(state) != 9) return LENNY_E_INVALID_ARG;
-    jint v[9];
-    env->GetIntArrayRegion(state, 0, 9, v);
-    lenny_control_state s{uint8_t(v[0]), v[1], uint8_t(v[2]), uint8_t(v[3]), uint8_t(v[4]), uint8_t(v[5]),
-                          uint16_t(v[6]), uint8_t(v[7]), uint8_t(v[8])};
+    if (!h || !state || env->GetArrayLength(state) != 11) return LENNY_E_INVALID_ARG;
+    jint v[11];
+    env->GetIntArrayRegion(state, 0, 11, v);
+    lenny_control_state s{uint8_t(v[0]), v[1],           uint8_t(v[2]),  uint8_t(v[3]),   uint8_t(v[4]),   uint8_t(v[5]),
+                          uint16_t(v[6]), uint8_t(v[7]), uint8_t(v[8]), uint16_t(v[9]), uint16_t(v[10])};
     return lenny_sender_send_control_state(ctx_of(h)->session, &s);
 }
 

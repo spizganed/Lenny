@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../brand.dart';
-import '../../core_bindings/lenny_bindings.dart';
 import '../../services/core_session.dart';
 import '../../state/providers.dart';
 import '../../state/status_text.dart';
@@ -11,7 +10,7 @@ import '../../theme/lenny_tokens.dart';
 import '../components/camera_controls.dart';
 import '../components/sticker.dart';
 
-/// Desktop home: header with toggleable connection details, preview hero with zoom/pan, 
+/// Desktop home: header with toggleable connection details, preview hero,
 /// and streamlined control column with rollout options and known devices.
 class ReceiverScreen extends ConsumerStatefulWidget {
   const ReceiverScreen({super.key});
@@ -195,16 +194,9 @@ class _ReceiverScreenState extends ConsumerState<ReceiverScreen> {
         gap,
       ],
       StickerCard(label: 'Focus & light', children: [
-        FocusButtons(caps: s.caps, controls: s.controls, onCommand: command),
+        ModeControls(caps: s.caps, controls: s.controls, onCommand: command, tapHint: 'Tap the preview to focus there.'),
         if (s.caps.hasTorch) TorchRow(controls: s.controls, onCommand: command),
       ]),
-      if (s.caps.hasExposure || s.caps.has(LENNY_CAP_EXPOSURE_LOCK)) ...[
-        gap,
-        StickerCard(label: 'Exposure', children: [
-          if (s.caps.hasExposure) ExposureSlider(caps: s.caps, controls: s.controls, onCommand: command),
-          if (s.caps.has(LENNY_CAP_EXPOSURE_LOCK)) ExposureLockToggle(controls: s.controls, onCommand: command),
-        ]),
-      ],
     ];
   }
 
@@ -330,68 +322,45 @@ class _Preview extends ConsumerWidget {
     final s = state;
     final streaming = s.link == LinkState.streaming;
     final lens = s.caps.lenses.length > s.controls.lens ? s.caps.lenses[s.controls.lens] : null;
-
     return Sticker(
       fill: LennyTokens.well,
       shadow: LennyTokens.shadowHero,
       padding: const EdgeInsets.all(16),
       child: Center(
-        // Preview box keeps a fixed aspect ratio container layout
         child: AspectRatio(
-          aspectRatio: 16 / 9,
+          aspectRatio: 16 / 9, // the native side letterboxes into this box and maps taps through it
           child: Container(
             decoration: stickerBox(Colors.black, LennyTokens.radiusTile, 0),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(LennyTokens.radiusTile - LennyTokens.border),
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  if (streaming && s.textureId != null)
-                    // Zoom & Pan interactive support wrapping the video stream
-                    InteractiveViewer(
-                      minScale: 1.0,
-                      maxScale: 4.0,
-                      child: LayoutBuilder(
-                        builder: (context, box) => GestureDetector(
-                          onTapUp: (d) => ref
-                              .read(receiverProvider.notifier)
-                              .focusAt(d.localPosition.dx / box.maxWidth, d.localPosition.dy / box.maxHeight),
-                          // BoxFit.cover ensures it fills the box completely at 16:9 without letterboxing
-                          child: FittedBox(
-                            fit: BoxFit.cover,
-                            child: SizedBox(
-                              width: 1920,
-                              height: 1080,
-                              child: MouseRegion(
-                                cursor: SystemMouseCursors.precise,
-                                child: Texture(textureId: s.textureId!),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    )
-                  else
-                    ColoredBox(
-                      color: LennyTokens.well,
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(Icons.photo_camera_outlined, size: 56, color: LennyTokens.textFaint),
-                          const SizedBox(height: 14),
-                          Text(
-                            streaming ? 'Waiting for video…' : 'No phone connected',
-                            style: LennyTokens.heading(24).copyWith(color: LennyTokens.textFaint),
-                          ),
-                        ],
-                      ),
+              child: Stack(fit: StackFit.expand, children: [
+                if (streaming && s.textureId != null)
+                  // Tap to focus there. The native side maps the tap through letterbox + rotation.
+                  LayoutBuilder(
+                    builder: (context, box) => GestureDetector(
+                      onTapUp: (d) => ref
+                          .read(receiverProvider.notifier)
+                          .focusAt(d.localPosition.dx / box.maxWidth, d.localPosition.dy / box.maxHeight),
+                      child: MouseRegion(cursor: SystemMouseCursors.precise, child: Texture(textureId: s.textureId!)),
                     ),
-                  if (streaming) ...[
-                    const Positioned(left: 18, top: 18, child: StickerBadge(text: 'LIVE', fill: LennyTokens.green, dot: true)),
-                    if (lens != null) Positioned(right: 18, top: 18, child: StickerBadge(text: lens)),
-                  ],
+                  )
+                else
+                  ColoredBox(
+                    color: LennyTokens.well,
+                    child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                      const Icon(Icons.photo_camera_outlined, size: 56, color: LennyTokens.textFaint),
+                      const SizedBox(height: 14),
+                      Text(
+                        streaming ? 'Waiting for video…' : 'No phone connected',
+                        style: LennyTokens.heading(24).copyWith(color: LennyTokens.textFaint),
+                      ),
+                    ]),
+                  ),
+                if (streaming) ...[
+                  const Positioned(left: 18, top: 18, child: StickerBadge(text: 'LIVE', fill: LennyTokens.green, dot: true)),
+                  if (lens != null) Positioned(right: 18, top: 18, child: StickerBadge(text: lens)),
                 ],
-              ),
+              ]),
             ),
           ),
         ),

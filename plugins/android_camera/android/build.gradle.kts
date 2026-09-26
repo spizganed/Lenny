@@ -93,6 +93,7 @@ kotlin {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
     implementation("androidx.core:core-ktx:1.13.1")
     // QR scan in the system UI: no camera permission, no scanner of our own.
     implementation("com.google.android.gms:play-services-code-scanner:16.1.0")

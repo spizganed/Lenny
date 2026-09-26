@@ -32,6 +32,7 @@ object LennyNative {
     const val CTL_SELECT_LENS = 18
     const val CTL_ZOOM = 19
     const val CTL_RESET_AUTO = 20
+    const val CTL_PAN = 21
     const val CAP_FOCUS = 1 shl 0
     const val CAP_FOCUS_LOCK = 1 shl 1
     const val CAP_EXPOSURE_COMP = 1 shl 2
@@ -40,6 +41,7 @@ object LennyNative {
     const val CAP_TORCH = 1 shl 5
     const val CAP_LENS = 1 shl 6
     const val CAP_ZOOM = 1 shl 7
+    const val CAP_PAN = 1 shl 8
     const val ACK_OK = 0
     const val ACK_UNSUPPORTED = 1
     const val ACK_FAILED = 2
@@ -47,11 +49,12 @@ object LennyNative {
 
     /**
      * modes = flat [w, h, fpsNum, fpsDen, ...]; lenses = flat [id, facing, ...] with one label each;
-     * exposure = [minEvMilli, maxEvMilli, stepMilli] or empty. Returns 0 on failure.
+     * exposure = [minEvMilli, maxEvMilli, stepMilli] or empty; lensCaps = per lens [zoomMin, zoomMax, modeCount,
+     * modes (w, h, fps, 1)...] (lenny_lens_caps). Returns 0 on failure.
      */
     @JvmStatic external fun create(
         deviceId: ByteArray, name: String, modes: IntArray, maxBitrateKbps: Int, controls: Int,
-        lenses: IntArray, lensLabels: Array<String>, exposure: IntArray, listener: SenderListener,
+        lenses: IntArray, lensLabels: Array<String>, exposure: IntArray, lensCaps: IntArray, listener: SenderListener,
     ): Long
 
     /** The lenny_session* inside a handle, for Dart FFI. */
@@ -63,7 +66,7 @@ object LennyNative {
     ): Int
     @JvmStatic external fun updateStream(handle: Long, width: Int, height: Int, fps: Int, bitrateKbps: Int): Int
 
-    /** state = [afMode, exposureCompEvMilli, exposureLock, wbLock, torch, lensId, zoomX100] */
+    /** state = [afMode, exposureCompEvMilli, exposureLock, wbLock, torch, lensId, zoomX100, battery, charging, panX, panY] */
     @JvmStatic external fun sendControlState(handle: Long, state: IntArray): Int
     @JvmStatic external fun disconnect(handle: Long): Int
     @JvmStatic external fun destroy(handle: Long)

@@ -64,7 +64,6 @@ class Pipeline(private val context: Context) : SenderListener {
     private var outSize = Size(1, 1)
     private var stopped = false
     private var focusRegion: MeteringRectangle? = null
-    private val focusTimeout = Runnable { cancelFocus() }
     @Volatile private var encoder: MediaCodec? = null
     @Volatile private var orientation = 0 // 0..3, quarter turns clockwise to upright
     private var deviceDegrees = 0 // how far the phone is turned clockwise from portrait
@@ -89,6 +88,8 @@ class Pipeline(private val context: Context) : SenderListener {
     /** One selectable lens: a camera id, plus the zoom ratio that picks its sensor on a logical camera. */
     private class Lens(val id: String, val chars: CameraCharacteristics, val facing: Int, val zoom: Float) {
         var label = ""
+        /** What this lens can stream, flat [w, h, fps, 1, ...] (CAPS per-lens modes, protocol 1.1). */
+        var modes = IntArray(0)
         fun <T> get(key: CameraCharacteristics.Key<T>): T? = chars.get(key)
     }
 
@@ -104,16 +105,23 @@ class Pipeline(private val context: Context) : SenderListener {
 
     /** Any thread except main (it waits for camera callbacks there). Returns the lenny_session* for Dart FFI. */
     fun start(host: String, port: Int, token: ByteArray?): Long {
+        // Discovery runs at every start (every Connect), so a camera that appeared since (USB) is picked up.
         lenses = discoverLenses()
         check(lenses.isNotEmpty()) { "no camera" }
+        lenses.forEach { it.modes = supportedModes(it) }
         state.lens = lenses.indexOfFirst { it.facing == FACING_BACK && it.zoom == 1f }.coerceAtLeast(0)
         caps = capabilities()
         lensLabels = lenses.map { it.label }
         exposure = exposureRange()
         val flat = lenses.flatMapIndexed { i, l -> listOf(i, l.facing) }.toIntArray()
+        // Per lens: [zoomMin, zoomMax, modeCount, modes...], zoom as ratio*100 relative to the lens (CTL_ZOOM units).
+        val lensCaps = lenses.flatMap { l ->
+            val (lo, hi) = zoomRange(l)
+            listOf((lo / l.zoom * 100).roundToInt(), (hi / l.zoom * 100).roundToInt(), l.modes.size / 4) + l.modes.toList()
+        }.toIntArray()
         handle = LennyNative.create(
-            deviceId(context), Build.MODEL, supportedModes(lenses[state.lens]), MAX_BITRATE_KBPS, caps, flat,
-            lensLabels.toTypedArray(), exposure,
+            deviceId(context), Build.MODEL, lenses[state.lens].modes, MAX_BITRATE_KBPS, caps, flat,
+            lensLabels.toTypedArray(), exposure, lensCaps,
             this,
         )
         check(handle != 0L) { "lenny_sender_create failed" }
@@ -129,7 +137,6 @@ class Pipeline(private val context: Context) : SenderListener {
     fun stop() {
         stopped = true
         orientationListener.disable()
-        main.removeCallbacks(focusTimeout)
         main.removeCallbacks(batteryTick)
         closeSession() // encoder released when the session reports closed
         device?.close()
@@ -147,19 +154,21 @@ class Pipeline(private val context: Context) : SenderListener {
     // ---- core callbacks (I/O thread) --------------------------------------------------------------------------
 
     override fun onStreamConfig(width: Int, height: Int, fpsNum: Int, fpsDen: Int, bitrateKbps: Int): IntArray {
-        val fps = (fpsNum / maxOf(fpsDen, 1)).coerceIn(15, 60)
         val bitrate = bitrateKbps.coerceIn(1000, MAX_BITRATE_KBPS)
+        // Only ever stream a mode the lens really has: the receiver was told about them in CAPS, and the effective
+        // mode goes back in STREAM_START, so nothing silently falls back.
+        val m = nearestMode(lenses[state.lens.coerceIn(lenses.indices)].modes, width, height, fpsNum / maxOf(fpsDen, 1))
         main.post {
-            val s = Settings(width, height, fps, bitrate, state.lens)
-            // Same settings again = a new stream (first connect or reconnect): back to Auto, except what the user set
-            // on the phone itself. Different settings on a running camera = the desktop switched mode mid-stream:
-            // keep the controls. ponytail: a reconnect that also changes the mode keeps remote overrides; pass the
-            // core's link state through JNI if that ever matters.
+            val s = Settings(m[0], m[1], m[2], bitrate, state.lens)
+            // Same settings again = a new stream (first connect or reconnect): back to Auto (protocol.md §6.9).
+            // Different settings on a running camera = the desktop switched mode mid-stream: keep the controls.
+            // ponytail: a reconnect that also changes the mode keeps the controls; pass the core's link state
+            // through JNI if that ever matters.
             val modeSwitch = bound != null && session != null && s.copy(lens = 0) != bound!!.copy(lens = 0)
-            if (!modeSwitch) resetRemoteOverrides()
+            if (!modeSwitch) resetAll()
             bindCamera(s)
         }
-        return intArrayOf(width, height, fps, 1, bitrate)
+        return intArrayOf(m[0], m[1], m[2], 1, bitrate)
     }
 
     override fun onControl(cmd: Int, x: Int, y: Int, value: Int): Int {
@@ -175,7 +184,7 @@ class Pipeline(private val context: Context) : SenderListener {
             return LennyNative.ACK_OK // no encoder yet = the first frame will be a keyframe anyway
         }
         if (!supported(cmd, value)) return LennyNative.ACK_UNSUPPORTED
-        main.post { apply(cmd, x, y, value, local = false) }
+        main.post { apply(cmd, x, y, value) }
         return LennyNative.ACK_OK
     }
 
@@ -185,10 +194,10 @@ class Pipeline(private val context: Context) : SenderListener {
 
     // ---- controls (main thread) -----------------------------------------------------------------------------
 
-    /** The phone's own UI. Same code path as remote controls; these survive reconnects. */
+    /** The phone's own UI. Same code path as remote controls. */
     fun control(cmd: Int, x: Int, y: Int, value: Int): Int {
         if (!supported(cmd, value)) return LennyNative.ACK_UNSUPPORTED
-        apply(cmd, x, y, value, local = true)
+        apply(cmd, x, y, value)
         return LennyNative.ACK_OK
     }
 
@@ -201,12 +210,12 @@ class Pipeline(private val context: Context) : SenderListener {
         LennyNative.CTL_TORCH -> caps and LennyNative.CAP_TORCH != 0
         LennyNative.CTL_SELECT_LENS -> caps and LennyNative.CAP_LENS != 0 && value in lenses.indices
         LennyNative.CTL_ZOOM -> caps and LennyNative.CAP_ZOOM != 0
+        LennyNative.CTL_PAN -> caps and LennyNative.CAP_PAN != 0
         LennyNative.CTL_RESET_AUTO -> true
         else -> false
     }
 
-    private fun apply(cmd: Int, x: Int, y: Int, value: Int, local: Boolean) {
-        if (local) state.local += cmd else state.local -= cmd
+    private fun apply(cmd: Int, x: Int, y: Int, value: Int) {
         when (cmd) {
             LennyNative.CTL_FOCUS_AT -> focusAt(x / 65535f, y / 65535f)
             LennyNative.CTL_FOCUS_LOCK -> {
@@ -231,70 +240,78 @@ class Pipeline(private val context: Context) : SenderListener {
             LennyNative.CTL_SELECT_LENS -> if (value != state.lens) {
                 state.lens = value
                 state.zoom100 = 100 // zoom is relative to the lens
+                state.panX = PAN_CENTER
+                state.panY = PAN_CENTER
                 if (!hasFlash(lenses[value])) state.torch = false
                 focusRegion = null
-                bound?.let { bindCamera(it.copy(lens = value)) }
+                bound?.let { b ->
+                    // The new lens may not have the current mode: move to its nearest one and tell the receiver.
+                    val m = nearestMode(lenses[value].modes, b.width, b.height, b.fps)
+                    val s = b.copy(width = m[0], height = m[1], fps = m[2], lens = value)
+                    if (s.copy(lens = 0) != b.copy(lens = 0)) {
+                        LennyNative.updateStream(handle, s.width, s.height, s.fps, s.bitrateKbps)
+                    }
+                    bindCamera(s)
+                }
             }
             LennyNative.CTL_ZOOM -> {
                 val (lo, hi) = zoomRange(lens)
                 val ratio = (lens.zoom * value / 100f).coerceIn(lo, hi)
                 state.zoom100 = (ratio / lens.zoom * 100).roundToInt()
             }
-            LennyNative.CTL_RESET_AUTO -> {
-                state.local.clear()
-                resetAll()
+            LennyNative.CTL_PAN -> {
+                state.panX = x
+                state.panY = y
             }
+            LennyNative.CTL_RESET_AUTO -> resetAuto()
         }
         applyRequest()
         publishState()
     }
 
-    /** upright (u, v) in 0..1 -> buffer coordinates, then tap-to-focus. Auto-cancels back to continuous AF after 5 s
-     *  unless focus lock is on. */
+    /** upright (u, v) in 0..1 -> buffer coordinates, then tap-to-focus. The focus holds there (Manual mode) until
+     *  Auto or focus_auto: tapping a point is the lock. */
     private fun focusAt(u: Float, v: Float) {
         state.focusX = u
         state.focusY = v
         if (lens.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)?.contains(CameraMetadata.CONTROL_AF_MODE_AUTO)
             != true
         ) return // fixed-focus lens
-        // Inverse of the receiver's upright rotation (quarter turns clockwise).
-        val (bx, by) = when (orientation) {
-            1 -> v to 1f - u
-            2 -> 1f - u to 1f - v
-            3 -> 1f - v to u
-            else -> u to v
-        }
+        val (bx, by) = toBuffer(u, v)
         focusRegion = meteringRegion(bx, by)
+        state.focusLocked = true
         state.afMode = ControlState.AF_FOCUSING
-        main.removeCallbacks(focusTimeout)
-        if (!state.focusLocked) main.postDelayed(focusTimeout, 5000)
         applyRequest(trigger = true)
     }
 
     private fun cancelFocus() {
-        main.removeCallbacks(focusTimeout)
         focusRegion = null
         state.afMode = if (state.focusLocked) ControlState.AF_LOCKED else ControlState.AF_CONTINUOUS
         applyRequest()
         publishState()
     }
 
-    /** Buffer point (0..1) -> 3A region. The region is in active-array coordinates of what's actually visible: the
-     *  output's aspect ratio crops the sensor, and zoom does too (except with CONTROL_ZOOM_RATIO, whose regions are
-     *  already relative to the zoomed view). */
+    /** Upright point (0..1, what the receiver shows) -> buffer point: inverse of the receiver's upright rotation
+     *  (quarter turns clockwise). The buffer is sensor-native, like the active array. */
+    private fun toBuffer(u: Float, v: Float): Pair<Float, Float> = when (orientation) {
+        1 -> v to 1f - u
+        2 -> 1f - u to 1f - v
+        3 -> 1f - v to u
+        else -> u to v
+    }
+
+    /** Buffer point (0..1) -> 3A region, in the coordinates regions use: the active array, or with
+     *  CONTROL_ZOOM_RATIO the zoomed view scaled to it. Within that, what's visible is the crop region (pan / pre-30
+     *  zoom), further cropped by the output's aspect ratio. */
     private fun meteringRegion(bx: Float, by: Float): MeteringRectangle? {
         val ar = lens.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return null
-        var w = ar.width().toFloat()
-        var h = ar.height().toFloat()
-        if (!usesZoomRatio(lens)) {
-            val z = effectiveZoom()
-            w /= z
-            h /= z
-        }
+        val vis = readout(lens).crop ?: Rect(0, 0, ar.width(), ar.height())
+        var w = vis.width().toFloat()
+        var h = vis.height().toFloat()
         val aspect = outSize.width.toFloat() / outSize.height
         if (w / h > aspect) w = h * aspect else h = w / aspect
-        val cx = ar.width() / 2f + (bx - 0.5f) * w
-        val cy = ar.height() / 2f + (by - 0.5f) * h
+        val cx = vis.exactCenterX() + (bx - 0.5f) * w
+        val cy = vis.exactCenterY() + (by - 0.5f) * h
         val half = maxOf(ar.width(), ar.height()) * 0.05f
         val r = Rect(
             (cx - half).toInt().coerceIn(0, ar.width() - 1), (cy - half).toInt().coerceIn(0, ar.height() - 1),
@@ -303,31 +320,24 @@ class Pipeline(private val context: Context) : SenderListener {
         return MeteringRectangle(r, MeteringRectangle.METERING_WEIGHT_MAX)
     }
 
-    /** "Auto, always": continuous AF, auto exposure, auto WB, no torch, 1x. Lens stays. */
-    private fun resetAll() {
-        main.removeCallbacks(focusTimeout)
+    /** Auto mode: continuous AF, auto exposure/ISO at EV 0, auto WB, no locks. Nothing manual is left over.
+     *  Framing and light (lens, zoom, pan, torch) aren't auto/manual things and stay. */
+    private fun resetAuto() {
         focusRegion = null
         state.focusLocked = false
         state.afMode = ControlState.AF_CONTINUOUS
         state.exposureEvMilli = 0
         state.aeLock = false
         state.awbLock = false
-        state.torch = false
-        state.zoom100 = 100
     }
 
-    private fun resetRemoteOverrides() {
-        val keep = state.local.toSet()
-        val saved = state.copy()
-        resetAll()
-        // Re-apply the phone user's own choices on top of Auto.
-        if (LennyNative.CTL_FOCUS_LOCK in keep && saved.focusLocked) apply(LennyNative.CTL_FOCUS_LOCK, 0, 0, 1, true)
-        if (LennyNative.CTL_EXPOSURE_COMP in keep) apply(LennyNative.CTL_EXPOSURE_COMP, 0, 0, saved.exposureEvMilli, true)
-        if (LennyNative.CTL_EXPOSURE_LOCK in keep) apply(LennyNative.CTL_EXPOSURE_LOCK, 0, 0, saved.aeLock.int, true)
-        if (LennyNative.CTL_WB_LOCK in keep) apply(LennyNative.CTL_WB_LOCK, 0, 0, saved.awbLock.int, true)
-        if (LennyNative.CTL_TORCH in keep) apply(LennyNative.CTL_TORCH, 0, 0, saved.torch.int, true)
-        if (LennyNative.CTL_ZOOM in keep) apply(LennyNative.CTL_ZOOM, 0, 0, saved.zoom100, true)
-        state.local.retainAll(keep)
+    /** A new stream (connect or reconnect): Auto, and default framing: no torch, 1x, centred. Lens stays. */
+    private fun resetAll() {
+        resetAuto()
+        state.torch = false
+        state.zoom100 = 100
+        state.panX = PAN_CENTER
+        state.panY = PAN_CENTER
     }
 
     private fun publishState() {
@@ -336,7 +346,7 @@ class Pipeline(private val context: Context) : SenderListener {
         val bm = context.getSystemService(BatteryManager::class.java)
         val pct = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
         val battery = intArrayOf(if (pct in 0..100) pct else 255, if (bm.isCharging) 1 else 0)
-        LennyNative.sendControlState(handle, state.toArray() + battery) // not streaming -> ignored
+        LennyNative.sendControlState(handle, state.toArray() + battery + intArrayOf(state.panX, state.panY)) // not streaming -> ignored
     }
 
     /** Battery rides on CONTROL_STATE; resend it now and then so the PC's number stays fresh. */
@@ -483,17 +493,10 @@ class Pipeline(private val context: Context) : SenderListener {
             val step = l.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: 0f
             if (step > 0f) b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, (state.exposureEvMilli / 1000f / step).roundToInt())
             b.set(CaptureRequest.FLASH_MODE, if (state.torch) CameraMetadata.FLASH_MODE_TORCH else CameraMetadata.FLASH_MODE_OFF)
-            val z = effectiveZoom()
-            if (usesZoomRatio(l)) {
-                if (Build.VERSION.SDK_INT >= 30) b.set(CaptureRequest.CONTROL_ZOOM_RATIO, z)
-            } else if (z > 1f) {
-                l.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)?.let { ar ->
-                    val w = (ar.width() / z).toInt()
-                    val h = (ar.height() / z).toInt()
-                    b.set(CaptureRequest.SCALER_CROP_REGION, Rect((ar.width() - w) / 2, (ar.height() - h) / 2,
-                        (ar.width() + w) / 2, (ar.height() + h) / 2))
-                }
-            }
+            // Zoom and pan on the sensor readout, never on finished frames (protocol.md §6.9 "Pan").
+            val r = readout(l)
+            if (r.ratio != null && Build.VERSION.SDK_INT >= 30) b.set(CaptureRequest.CONTROL_ZOOM_RATIO, r.ratio)
+            r.crop?.let { b.set(CaptureRequest.SCALER_CROP_REGION, it) }
             val region = focusRegion
             val afModes = l.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: IntArray(0)
             if (region != null) {
@@ -525,9 +528,30 @@ class Pipeline(private val context: Context) : SenderListener {
         }
     }
 
-    private fun effectiveZoom(): Float {
-        val (lo, hi) = zoomRange(lens)
-        return (lens.zoom * state.zoom100 / 100f).coerceIn(lo, hi)
+    private fun effectiveZoom(l: Lens = lens): Float {
+        val (lo, hi) = zoomRange(l)
+        return (l.zoom * state.zoom100 / 100f).coerceIn(lo, hi)
+    }
+
+    /** CONTROL_ZOOM_RATIO (null = don't set) and SCALER_CROP_REGION (null = whole view) for the current zoom + pan. */
+    private class Readout(val ratio: Float?, val crop: Rect?)
+
+    /**
+     * Zoom Z (1 = the camera's full active array) shows a W/Z x H/Z window; pan slides that window over the full
+     * array. With CONTROL_ZOOM_RATIO (API 30+) the platform picks the physical sensor from the ratio, and the crop
+     * region is relative to the zoomed view. So: ratio = Z while centred (pure platform zoom, sensor switching
+     * included); when panned towards an edge, the ratio drops just enough that the zoomed view still contains the
+     * window, and the crop selects the window inside it (a tele sensor can't see the array's edge, so near the edge
+     * the platform may go back to the wider sensor). Before API 30 there's no ratio: the crop does everything,
+     * digital zoom on one sensor, up to SCALER_AVAILABLE_MAX_DIGITAL_ZOOM.
+     */
+    private fun readout(l: Lens): Readout {
+        val z = effectiveZoom(l)
+        val ratioApi = usesZoomRatio(l)
+        val ar = l.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return Readout(if (ratioApi) z else null, null)
+        val (bx, by) = toBuffer(state.panX / 65535f, state.panY / 65535f)
+        val (ratio, crop) = panCrop(ar.width(), ar.height(), z, bx, by, ratioApi)
+        return Readout(ratio, crop?.let { Rect(it[0], it[1], it[2], it[3]) })
     }
 
     private fun createEncoder(width: Int, height: Int, fps: Int, bitrateKbps: Int): MediaCodec {
@@ -682,7 +706,7 @@ class Pipeline(private val context: Context) : SenderListener {
             if (l.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true) c = c or LennyNative.CAP_EXPOSURE_LOCK
             if (l.get(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true) c = c or LennyNative.CAP_WB_LOCK
             if (hasFlash(l)) c = c or LennyNative.CAP_TORCH
-            if (zoomRange(l).second > 1f) c = c or LennyNative.CAP_ZOOM
+            if (zoomRange(l).second > 1f) c = c or LennyNative.CAP_ZOOM or LennyNative.CAP_PAN
         }
         if (lenses.size > 1) c = c or LennyNative.CAP_LENS
         return c
@@ -702,46 +726,82 @@ class Pipeline(private val context: Context) : SenderListener {
         private const val TAG = "lenny"
         private const val BATTERY_PERIOD_MS = 60_000L
         private const val MAX_BITRATE_KBPS = 20000
-        private val FALLBACK_MODES = intArrayOf(1280, 720, 30, 1, 1920, 1080, 30, 1)
-
-        /** Sizes worth offering, per aspect ratio: 16:9, 4:3, 1:1. Anything else the camera lists is noise. */
-        private val WANTED_SIZES = listOf(
-            3840 to 2160, 2560 to 1440, 1920 to 1080, 1280 to 720,
-            2560 to 1920, 1920 to 1440, 1440 to 1080, 1280 to 960, 960 to 720, 640 to 480,
-            1440 to 1440, 1080 to 1080, 720 to 720,
-        )
-        private val WANTED_FPS = intArrayOf(24, 30, 60)
+        private const val PAN_CENTER = 32768
+        private val FALLBACK_MODES = intArrayOf(1280, 720, 30, 1)
+        private const val MAX_MODES = 32 // what a receiver keeps per lens (LENNY_MAX_PEER_MODES)
 
         /**
-         * CAPS modes (w, h, fps, 1 flattened): every wanted size the camera outputs to the encoder, at every wanted
-         * frame rate that the camera can hold (an AE range topping out exactly there, and a short enough minimum
-         * frame duration) and the AVC encoder accepts. Taken from [l] (the default lens); other lenses clamp.
+         * What [l] can stream (w, h, fps, 1 flattened), straight from the camera and the encoder, nothing assumed:
+         * every size the camera outputs to MediaCodec (>= 240 lines), at every frame rate the camera can hold there
+         * (an AE target range topping out exactly at it, 15..60, and a short enough minimum frame duration) that an
+         * AVC encoder accepts. Per aspect ratio the 4 largest sizes, 4 aspect ratios at most (by largest size), so
+         * the list fits a receiver's picker; biggest first.
          */
         private fun supportedModes(l: Lens): IntArray {
             val map = l.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return FALLBACK_MODES
-            val sizes = map.getOutputSizes(MediaCodec::class.java).orEmpty().map { it.width to it.height }.toSet()
-            val aeRanges = l.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).orEmpty()
+            val aeFps = l.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).orEmpty()
+                .map { it.upper }.filter { it in 15..60 }.distinct().sorted()
             val encoders = android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS).codecInfos
                 .filter { it.isEncoder && MediaFormat.MIMETYPE_VIDEO_AVC in it.supportedTypes }
                 .mapNotNull { runCatching { it.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC).videoCapabilities }.getOrNull() }
+            val sizes = map.getOutputSizes(MediaCodec::class.java).orEmpty()
+                .filter { it.height >= 240 && encoders.any { e -> e.isSizeSupported(it.width, it.height) } }
+                .sortedByDescending { it.width * it.height }
+                .groupBy { aspectKey(it.width, it.height) }.values.take(4).flatMap { it.take(4) }
+                .sortedByDescending { it.width * it.height }
             val modes = mutableListOf<Int>()
-            for ((w, h) in WANTED_SIZES) {
-                if ((w to h) !in sizes) continue
-                val minFrameNs = map.getOutputMinFrameDuration(MediaCodec::class.java, Size(w, h))
-                for (fps in WANTED_FPS) {
-                    if (aeRanges.none { it.upper == fps }) continue
+            for (size in sizes) {
+                val minFrameNs = map.getOutputMinFrameDuration(MediaCodec::class.java, size)
+                for (fps in aeFps) {
                     if (minFrameNs > 0 && minFrameNs > 1_000_000_000L / fps) continue
-                    if (encoders.none { it.areSizeAndRateSupported(w, h, fps.toDouble()) }) continue
-                    modes += listOf(w, h, fps, 1)
+                    if (encoders.none { it.areSizeAndRateSupported(size.width, size.height, fps.toDouble()) }) continue
+                    if (modes.size < MAX_MODES * 4) modes += listOf(size.width, size.height, fps, 1)
                 }
             }
-            Log.i(TAG, "modes: " + modes.chunked(4).joinToString { "${it[0]}x${it[1]}@${it[2]}" })
+            Log.i(TAG, "lens ${l.label} (${l.id}) modes: " + modes.chunked(4).joinToString { "${it[0]}x${it[1]}@${it[2]}" })
             return if (modes.isEmpty()) FALLBACK_MODES else modes.toIntArray()
+        }
+
+        /**
+         * [readout] without Android types: array W x H, zoom [z] (1 = whole array), window centre at (bx, by) in 0..1
+         * of the pannable range, buffer axes. Returns (CONTROL_ZOOM_RATIO or null, crop [l, t, r, b] or null).
+         */
+        internal fun panCrop(W: Int, H: Int, z: Float, bx: Float, by: Float, ratioApi: Boolean): Pair<Float?, IntArray?> {
+            if (z <= 1f) return (if (ratioApi) z else null) to null
+            val (fw, fh) = W.toFloat() to H.toFloat()
+            val (w, h) = fw / z to fh / z
+            val cx = fw / 2 + (bx - 0.5f) * (fw - w)
+            val cy = fh / 2 + (by - 0.5f) * (fh - h)
+            if (!ratioApi) {
+                return null to intArrayOf((cx - w / 2).roundToInt(), (cy - h / 2).roundToInt(), (cx + w / 2).roundToInt(), (cy + h / 2).roundToInt())
+            }
+            val zr = minOf(z, fw / (2 * abs(cx - fw / 2) + w), fh / (2 * abs(cy - fh / 2) + h)).coerceAtLeast(1f)
+            if (zr >= z * 0.999f) return z to null // centred: pure platform zoom
+            // Active-array point -> post-zoom coordinates (the zoomed view scaled back to the array's size).
+            fun mx(x: Float) = ((x - (fw - fw / zr) / 2) * zr).roundToInt().coerceIn(0, W)
+            fun my(y: Float) = ((y - (fh - fh / zr) / 2) * zr).roundToInt().coerceIn(0, H)
+            return zr to intArrayOf(mx(cx - w / 2), my(cy - h / 2), mx(cx + w / 2), my(cy + h / 2))
+        }
+
+        /** Width:height reduced, so 1920x1080 and 1280x720 group together. */
+        internal fun aspectKey(w: Int, h: Int): Pair<Int, Int> {
+            tailrec fun gcd(a: Int, b: Int): Int = if (b == 0) a else gcd(b, a % b)
+            val g = gcd(w, h)
+            return w / g to h / g
+        }
+
+        /** The mode in [modes] (flat w, h, fps, 1) nearest the request: same aspect first, then area, then fps. */
+        internal fun nearestMode(modes: IntArray, w: Int, h: Int, fps: Int): IntArray {
+            val list = modes.toList().chunked(4)
+            val best = list.minByOrNull { m ->
+                val aspect = if (m[0].toLong() * h == m[1].toLong() * w) 0L else 1L
+                // Lexicographic: aspect, then area difference, then fps difference.
+                aspect * 1_000_000_000_000L + abs(m[0].toLong() * m[1] - w.toLong() * h) * 1000 + abs(m[2] - fps)
+            } ?: return intArrayOf(w, h, fps, 1)
+            return best.toIntArray()
         }
         private const val FACING_BACK = 0
         private const val FACING_FRONT = 1
-
-        private val Boolean.int get() = if (this) 1 else 0
 
         private fun facingOf(c: CameraCharacteristics) = when (c.get(CameraCharacteristics.LENS_FACING)) {
             CameraMetadata.LENS_FACING_BACK -> FACING_BACK
@@ -806,16 +866,18 @@ data class ControlState(
     var torch: Boolean = false,
     var lens: Int = 0,
     var zoom100: Int = 100,
-    /** Controls last set from the phone's own UI. They survive reconnects; remote ones reset to Auto. */
-    val local: MutableSet<Int> = mutableSetOf(),
+    /** Where the zoomed crop sits, 0..65535 per axis, 32768 = centred (protocol 1.1 pan). */
+    var panX: Int = 32768,
+    var panY: Int = 32768,
 ) {
+    /** lenny_control_state order, minus battery/charging (added by the caller), plus pan at the end. */
     fun toArray() = intArrayOf(
         afMode, exposureEvMilli, if (aeLock) 1 else 0, if (awbLock) 1 else 0, if (torch) 1 else 0, lens, zoom100,
     )
 
     fun toMap(): Map<String, Any> = mapOf(
         "afMode" to afMode, "focusLocked" to focusLocked, "exposureEvMilli" to exposureEvMilli, "aeLock" to aeLock,
-        "awbLock" to awbLock, "torch" to torch, "lens" to lens, "zoom100" to zoom100,
+        "awbLock" to awbLock, "torch" to torch, "lens" to lens, "zoom100" to zoom100, "panX" to panX, "panY" to panY,
     )
 
     companion object {

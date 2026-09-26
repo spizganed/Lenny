@@ -30,33 +30,67 @@ class LensPicker extends StatelessWidget {
       );
 }
 
-/// Auto (on while everything is automatic; tapping it resets) + Lock focus.
-class FocusButtons extends StatelessWidget {
-  const FocusButtons({super.key, required this.caps, required this.controls, required this.onCommand});
+/// The two camera modes, always both visible. Auto: continuous autofocus, auto exposure/ISO at EV 0, nothing else to
+/// set. Manual: tap the preview to focus there (the focus holds; that's the lock), exposure compensation and exposure
+/// lock. Going back to Auto resets all of it (reset_auto). The camera is in Manual whenever anything manual is set,
+/// wherever it was set; pressing Manual here only shows the controls.
+class ModeControls extends StatefulWidget {
+  const ModeControls({
+    super.key,
+    required this.caps,
+    required this.controls,
+    required this.onCommand,
+    required this.tapHint,
+    this.exposureTitle,
+  });
   final CameraCaps caps;
   final CameraControls controls;
   final ValueChanged<CameraCommand> onCommand;
+  final String tapHint; // where tap-to-focus happens ("Tap the preview…", or on the phone: "…on the PC")
+  final String? exposureTitle;
 
   @override
-  Widget build(BuildContext context) => Row(children: [
-        Expanded(
-          child: ToggleSticker(
-            label: 'Auto',
-            on: controls.isAuto,
-            onPressed: controls.isAuto ? () {} : () => onCommand(Commands.auto),
+  State<ModeControls> createState() => _ModeControlsState();
+}
+
+class _ModeControlsState extends State<ModeControls> {
+  bool _manual = false; // Manual picked here, before anything manual was set
+
+  @override
+  Widget build(BuildContext context) {
+    final manual = _manual || !widget.controls.isAuto;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Segmented(
+        labels: const ['Auto', 'Manual'],
+        selected: manual ? 1 : 0,
+        onSelect: (i) {
+          setState(() => _manual = i == 1);
+          if (i == 0 && !widget.controls.isAuto) widget.onCommand(Commands.auto);
+        },
+      ),
+      if (manual) ...[
+        const SizedBox(height: 14),
+        if (widget.caps.has(LENNY_CAP_FOCUS))
+          Text(
+            widget.controls.focusLocked ? 'Focus held. ${widget.tapHint}' : widget.tapHint,
+            style: LennyTokens.body(size: 14, color: LennyTokens.textMuted),
           ),
-        ),
-        if (caps.has(LENNY_CAP_FOCUS_LOCK)) ...[
-          const SizedBox(width: 12),
-          Expanded(
-            child: ToggleSticker(
-              label: 'Lock focus',
-              on: controls.focusLocked,
-              onPressed: () => onCommand(Commands.focusLock(!controls.focusLocked)),
-            ),
+        if (widget.caps.hasExposure) ...[
+          const SizedBox(height: 14),
+          ExposureSlider(
+            caps: widget.caps,
+            controls: widget.controls,
+            onCommand: widget.onCommand,
+            title: widget.exposureTitle,
           ),
         ],
-      ]);
+        if (widget.caps.has(LENNY_CAP_EXPOSURE_LOCK)) ...[
+          const SizedBox(height: 14),
+          ExposureLockToggle(controls: widget.controls, onCommand: widget.onCommand),
+        ],
+      ],
+    ]);
+  }
 }
 
 /// Auto exposure is always on; this freezes it where it is.
@@ -181,9 +215,9 @@ class _ExposureSliderState extends State<ExposureSlider> {
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Row(children: [
         Expanded(child: widget.title == null ? const SizedBox() : Text(widget.title!, style: LennyTokens.button())),
-        // Auto exposure is always on; the slider only biases it. Say so, so nobody hunts for an "auto" switch.
+        // Auto exposure is still metering; the slider only biases it.
         Text(
-          widget.controls.aeLock ? 'Locked · ${_ev(_value)}' : 'Auto · ${_ev(_value)}',
+          widget.controls.aeLock ? 'Locked · ${_ev(_value)}' : _ev(_value),
           style: LennyTokens.mono(size: 14, weight: FontWeight.w700, color: LennyTokens.lilac),
         ),
       ]),

@@ -189,9 +189,15 @@ default **Auto** control state (protocol.md §6.9: every connect and reconnect s
   `CONTROL_AWB_MODE_AUTO`, `CONTROL_VIDEO_STABILIZATION_MODE_OFF` (EIS buffers frames ahead).
 - Orientation: from the orientation sensor (`OrientationEventListener`), so it's right whichever way the
   phone stands; flat on a table keeps the last value.
-- Tap-to-focus: receiver sends `CONTROL focus_at(x,y)` in normalized sensor-upright coords.
-  Sender maps it to an AF/AE region in the visible part of the active array, triggers AF, then
-  returns to continuous AF after 5 s unless focus lock is on.
+- Two modes, Auto and Manual (protocol.md §6.9). Tap-to-focus (Manual): receiver sends `CONTROL focus_at(x,y)` in
+  normalized upright coords. Sender maps it to an AF/AE region in the visible part of the active array, triggers AF
+  and holds focus there until Auto. Every connect and reconnect starts in Auto.
+- Capabilities per lens (sent in CAPS, protocol 1.1): the modes each lens can stream, straight from its
+  StreamConfigurationMap, AE fps ranges and the AVC encoder, no hardcoded size list; and its zoom range
+  (`CONTROL_ZOOM_RATIO_RANGE`, or 1..`SCALER_AVAILABLE_MAX_DIGITAL_ZOOM` before API 30, crop only). Discovery runs at
+  every Connect. The stream only ever uses a mode the current lens lists.
+- Zoom and pan on the sensor readout: `CONTROL_ZOOM_RATIO` (the platform switches physical sensors) plus
+  `SCALER_CROP_REGION` to move the zoomed window over the full field of view; never a transform of finished frames.
 - MediaCodec: `video/avc`, `COLOR_FormatSurface`, CBR/VBR bitrate from CAPS_SELECT,
   `KEY_I_FRAME_INTERVAL=1` s, `KEY_LOW_LATENCY=1` (API 30+), `KEY_MAX_B_FRAMES=0`,
   Baseline or Constrained High profile. Keyframe on demand via `PARAMETER_KEY_REQUEST_SYNC_FRAME`.

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../brand.dart';
-import '../../core_bindings/lenny_bindings.dart';
 import '../../services/core_session.dart';
 import '../../services/pc_link.dart';
 import '../../state/providers.dart';
@@ -118,16 +117,18 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
                   ? [StickerButton(label: 'Disconnect', kind: ButtonKind.destructive, onPressed: ctl.disconnect)]
                   : [...manual, ...quick],
             );
-            final lensFocus = [
+            final lensTorch = [
               if (s.caps.hasLenses) LensPicker(caps: s.caps, controls: s.controls, onCommand: ctl.command),
-              FocusButtons(caps: s.caps, controls: s.controls, onCommand: ctl.command),
               if (s.caps.hasTorch) TorchRow(controls: s.controls, onCommand: ctl.command),
             ];
-            List<Widget> exposure({String? title}) => [
-              if (s.caps.hasExposure)
-                ExposureSlider(caps: s.caps, controls: s.controls, onCommand: ctl.command, title: title),
-              if (s.caps.has(LENNY_CAP_EXPOSURE_LOCK)) ExposureLockToggle(controls: s.controls, onCommand: ctl.command),
-            ];
+            // The phone shows no preview, so tap-to-focus happens on the PC.
+            Widget mode({String? title}) => ModeControls(
+                  caps: s.caps,
+                  controls: s.controls,
+                  onCommand: ctl.command,
+                  tapHint: 'Tap the preview on the PC to focus there.',
+                  exposureTitle: title,
+                );
             const gap = SizedBox(height: 12);
             Widget column(List<Widget> children) => ListView(padding: const EdgeInsets.all(16), children: children);
             // Landscape: status | camera | exposure, so nothing scrolls on a phone held sideways.
@@ -141,14 +142,13 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
               return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                 Expanded(flex: 4, child: column([title, gap, hero, gap, connection])),
                 if (streaming) ...[
-                  // The middle column is a bit wider so "Lock focus" isn't cut off.
-                  Expanded(flex: 5, child: column([StickerCard(label: 'Camera', children: lensFocus)])),
-                  if (exposure().isNotEmpty)
-                    Expanded(flex: 4, child: column([StickerCard(label: 'Exposure', children: exposure())])),
+                  if (lensTorch.isNotEmpty)
+                    Expanded(flex: 4, child: column([StickerCard(label: 'Camera', children: lensTorch)])),
+                  Expanded(flex: 5, child: column([StickerCard(label: 'Focus & exposure', children: [mode()])])),
                 ],
               ]);
             }
-            final camera = streaming ? StickerCard(label: 'Camera', children: [...lensFocus, ...exposure(title: 'Exposure')]) : null;
+            final camera = streaming ? StickerCard(label: 'Camera', children: [...lensTorch, mode(title: 'Exposure')]) : null;
             return Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 480),
