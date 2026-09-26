@@ -1,4 +1,5 @@
-// End-to-end sender -> receiver over TCP on 127.0.0.1, through the public C ABI only (the M1 loopback test).
+// End-to-end sender -> receiver over TCP on 127.0.0.1, through the public C ABI only. Kept from the C++ core: built
+// against include/lenny/lenny.h and linked to the Rust static library, it proves C/C++ callers see the same ABI.
 #include <atomic>
 #include <chrono>
 #include <cstdlib>

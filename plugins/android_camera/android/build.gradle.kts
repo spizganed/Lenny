@@ -25,6 +25,26 @@ plugins {
     id("com.android.library")
 }
 
+// The core is a Rust crate (/core). cargo-ndk builds liblenny_core.so per ABI; it's packaged from jniLibs and
+// linked by the JNI shim (src/main/cpp). Needs `cargo install cargo-ndk` and the Android Rust targets
+// (rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android).
+val rustJniLibs = layout.buildDirectory.dir("rustJniLibs")
+val cargoNdk by tasks.registering(Exec::class) {
+    val out = rustJniLibs.get().asFile
+    workingDir = file("../../../core")
+    inputs.dir(file("../../../core/src"))
+    inputs.files(file("../../../core/Cargo.toml"), file("../../../core/build.rs"), file("../../../Cargo.lock"))
+    outputs.dir(out)
+    commandLine(
+        "cargo", "ndk", "--platform", "24",
+        "-t", "arm64-v8a", "-t", "armeabi-v7a", "-t", "x86_64", "-t", "x86",
+        "-o", out.absolutePath, "build", "--release", "--lib",
+    )
+    val ndk = androidComponents.sdkComponents.ndkDirectory
+    doFirst { environment("ANDROID_NDK_HOME", ndk.get().asFile.absolutePath) }
+}
+tasks.named("preBuild") { dependsOn(cargoNdk) }
+
 android {
     namespace = "com.spizganed.android_camera"
 
@@ -38,6 +58,7 @@ android {
     sourceSets {
         getByName("main") {
             java.srcDirs("src/main/kotlin")
+            jniLibs.srcDir(rustJniLibs.get().asFile) // filled by cargoNdk (preBuild depends on it)
         }
     }
 
@@ -46,14 +67,17 @@ android {
         consumerProguardFiles("consumer-rules.pro")
         externalNativeBuild {
             cmake {
-                arguments += listOf("-DANDROID_STL=c++_shared")
+                arguments += listOf(
+                    "-DANDROID_STL=c++_shared",
+                    "-DLENNY_RUST_LIB_DIR=${rustJniLibs.get().asFile.absolutePath}",
+                )
             }
         }
     }
 
     ndkVersion = "30.0.16248370"
 
-    // Builds /core as liblenny_core.so plus the JNI shim; Dart FFI opens the same .so, so both share sessions.
+    // JNI shim only; it links the Rust liblenny_core.so built by cargoNdk above.
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")

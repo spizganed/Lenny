@@ -34,8 +34,8 @@ encryption (deferred, see §9), macOS receiver (dropped, see §11), mascot art.
  │  MediaCodec H.264 ─┐     │   │                   │                     ▼     │          │
  │  NsdManager        │     │   │                   │  Shared-mem writer (Global\)         │
  │  Foreground service│     │   │                   ├─────────────────────┬────────────────┤
- ├────────────────────▼─────▼───┤   TCP (Wi-Fi /    │ lenny_core (C++20)  │                │
- │ lenny_core (C++20, C ABI)    │◄─ ADB fwd / RNDIS)►│ protocol, session,  │                │
+ ├────────────────────▼─────▼───┤   TCP (Wi-Fi /    │ lenny_core (Rust)   │                │
+ │ lenny_core (Rust, C ABI)     │◄─ ADB fwd / RNDIS)►│ protocol, session,  │                │
  │ protocol, session, transport │                   │ transport, jitter   │                │
  └──────────────────────────────┘                   └─────────────────────┼────────────────┘
                                                            Global\ shared memory ring
@@ -67,7 +67,8 @@ fed from the same decoded NV12 frames.
     services/             ← the ONLY code that calls FFI / method channels
     state/                ← Riverpod providers
     core_bindings/        ← ffigen output (generated, don't edit)
-/core       C++20 library, CMake, C ABI in include/lenny/lenny.h, tests in core/tests
+/core       Rust crate lenny_core (cdylib + staticlib + rlib), C ABI in include/lenny/lenny.h, tests in core/tests
+/vcam       Rust crate lenny_vcam: IVirtualCamera trait + backends (v4l2loopback, null)
 /plugins
   android_camera/         Kotlin: Camera2, MediaCodec encoder, NsdManager, foreground service
   windows_receiver/       C++: MF decoder, shm writer, DNS-SD browse, adb helper, preview texture
@@ -81,12 +82,10 @@ fed from the same decoded NV12 frames.
 
 ## 4. Shared core (`/core`)
 
-C++20, CMake, no platform headers (no `<windows.h>`, no `<jni.h>`, no POSIX-only
-headers in public or private core code). Sockets are the one place that differs
-per OS; they sit behind `ITransport`, and the TCP implementation uses a tiny
-`#if` shim for Winsock vs BSD sockets inside one `.cpp`. That's the only allowed
-exception, because the BSD sockets API is the same on all 4 targets (Android, iOS, Windows, Linux) apart from
-init and close.
+Rust (ADR-0006; it was C++20 until the port, with the C ABI kept identical). No OS-specific code: sockets are
+the one place that differs per OS, and they sit behind the `Transport` trait (`transport.rs`), built on std +
+socket2, which cover Winsock and BSD sockets alike. The only `cfg` there is one errno check for a non-blocking
+connect in progress.
 
 Modules:
 
@@ -102,8 +101,10 @@ Modules:
 
 One header, `core/include/lenny/lenny.h`. Rules:
 - Opaque handles (`lenny_session_t*`), plain C structs, `int32_t` error codes.
-- No C++ exceptions cross the ABI. Every exported function is wrapped in `try/catch(...)`
-  and returns `LENNY_E_INTERNAL` on failure.
+- No panics cross the ABI. Every exported function is wrapped in `catch_unwind` and returns
+  `LENNY_E_INTERNAL` (or NULL) on failure.
+- The header is hand-written (it's the documentation); `core/tools/abi_check.sh` regenerates one with cbindgen
+  from the Rust source and fails CI on any difference in struct layout, constant value or function type.
 - Callbacks are C function pointers + `void* user`. They are invoked on core-owned
   threads. The docs say which thread, and callers must not block in them.
 - ABI version: `lenny_abi_version()`. Additive changes only within a major version.
@@ -381,10 +382,13 @@ The core, protocol and Flutter UI are unchanged in both.
 macOS receiver: **dropped** (decision 2026-09-25). The protocol keeps `platform=4` reserved so the numbering never shifts.
 
 ## 12. Build and CI
-- Core: CMake presets for windows-x64, windows-x86 (only for the tests the DShow filter shares, like the shm format),
-  android-arm64/armv7/x86_64 (NDK), later ios/linux. Tests: a ~30-line in-repo harness (`core/tests/check.hpp`); no test framework dependency.
+- Core: a Cargo workspace at the repo root (`core`, `vcam`, `desktop`). `cargo test` runs the wire, vector and
+  full-session tests; `core/tests/c_abi/` is the old C++ session test, built against lenny.h and linked to the Rust
+  static library under ASan/UBSan. Android: cargo-ndk from the android_camera Gradle build (arm64, armv7, x86_64,
+  x86). `core/CMakeLists.txt` wraps cargo for CMake consumers (Windows, not yet built there).
 - Flutter: `flutter build apk` / `flutter build windows`. ffigen runs in CI and a diff check keeps bindings in sync.
-- CI: GitHub Actions — core tests on windows + ubuntu, Android build, Windows build. Fuzzing of `wire` decode via libFuzzer on Linux job.
+- CI: GitHub Actions `core.yml` — fmt, clippy, tests, ABI check and the C ABI test on Linux; cargo-ndk build for Android.
+  Windows jobs return with the Windows desktop app. Fuzzing of `wire` decode (cargo-fuzz) is still to do.
 
 ## 13. Milestone risk register (top items)
 

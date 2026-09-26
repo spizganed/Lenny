@@ -1,6 +1,7 @@
 # ADR-0003: Windows native code in C++, no C#/.NET
 
-Status: proposed
+Status: superseded by [ADR-0006](0006-core-in-rust.md) (core in Rust). The reasoning below about keeping
+C#/.NET out of the DirectShow filter still holds for Phase B's Windows work.
 
 The prompt asks: receiver in C++ or C#/.NET calling the core via C ABI? The UI is Flutter either way, so the question is only
 what the native Windows parts are written in.

@@ -51,7 +51,13 @@ Windows may ask to let Lenny through the firewall: allow it on private networks,
 
 ## Build
 
-Needs Flutter (stable), Android Studio (SDK + NDK) and, for Windows, Visual Studio 2022 with the C++ workload.
+Needs Flutter (stable), Android Studio (SDK + NDK), Rust (stable) with the Android targets and cargo-ndk, and, for
+Windows, Visual Studio 2022 with the C++ workload.
+
+```sh
+rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
+cargo install cargo-ndk
+```
 
 ```sh
 cd app
@@ -59,17 +65,19 @@ flutter build apk --release       # app/build/app/outputs/flutter-apk/app-releas
 flutter build windows --release   # app/build/windows/x64/runner/Release/ (ship the whole folder)
 ```
 
-Core library tests (C++):
+Core library tests (Rust; the Android build runs cargo-ndk for you):
 
 ```sh
-cmake -S core -B core/build -G Ninja && cmake --build core/build && core/build/lenny_tests
+cargo test --workspace
+core/tools/abi_check.sh   # the Rust core still exports exactly include/lenny/lenny.h (needs cbindgen, clang)
 ```
 
 ## How it's built
 
 | Part | What |
 | --- | --- |
-| `core/` | C++ library shared by every platform: protocol, sessions, pairing, clock sync. C ABI. |
+| `core/` | Rust library shared by every platform: protocol, sessions, pairing, clock sync. C ABI (`include/lenny/lenny.h`). |
+| `vcam/` | Virtual camera behind one trait: v4l2loopback on Linux, a null (file) backend anywhere. |
 | `app/` | Flutter app, one codebase: phone UI on Android, desktop UI on Windows. |
 | `plugins/android_camera` | Camera2 capture + MediaCodec H.264 encoder (Kotlin + JNI). |
 | `plugins/windows_receiver` | Media Foundation decoder + preview texture (C++). |

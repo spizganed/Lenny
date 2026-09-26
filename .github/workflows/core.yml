@@ -2,31 +2,57 @@ name: core
 
 on:
   push:
-    paths: ["core/**", "protocol/**", ".github/workflows/core.yml"]
+    paths: ["core/**", "vcam/**", "desktop/**", "protocol/**", "Cargo.*", "rustfmt.toml", ".github/workflows/core.yml"]
   pull_request:
-    paths: ["core/**", "protocol/**", ".github/workflows/core.yml"]
+    paths: ["core/**", "vcam/**", "desktop/**", "protocol/**", "Cargo.*", "rustfmt.toml", ".github/workflows/core.yml"]
 
 jobs:
-  test:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: windows-msvc, os: windows-latest, flags: "" }
-          - { name: linux-gcc, os: ubuntu-latest, flags: "" }
-          - { name: linux-asan-ubsan, os: ubuntu-latest, flags: "-fsanitize=address,undefined -fno-omit-frame-pointer" }
-          - { name: linux-tsan, os: ubuntu-latest, flags: "-fsanitize=thread" }
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
+  linux:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: ilammy/msvc-dev-cmd@v1
-        if: runner.os == 'Windows'
-      - name: Configure
-        run: cmake -S core -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="${{ matrix.flags }}"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cbindgen
+      - name: Desktop build deps
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Build
-        run: cmake --build build
+        run: cargo build --workspace
       - name: Test
-        run: build/lenny_tests
+        run: cargo test --workspace
+      - name: C ABI matches include/lenny/lenny.h (cbindgen)
+        run: core/tools/abi_check.sh
+      - name: C ABI end-to-end test (C++ caller, ASan/UBSan)
+        run: |
+          cargo build --release -p lenny_core
+          g++ -std=c++20 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Icore/include \
+            core/tests/c_abi/*.cpp target/release/liblenny_core.a -lpthread -ldl -o c_abi_tests
+          ./c_abi_tests
         env:
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android, i686-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+      - name: cargo ndk build
+        run: cargo ndk --platform 24 -t arm64-v8a -t armeabi-v7a -t x86_64 -t x86 -o jniLibs build --release -p lenny_core --lib
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
+      - name: SONAME is set (the JNI shim must not link a build path)
+        run: $ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -d jniLibs/arm64-v8a/liblenny_core.so | grep 'SONAME.*liblenny_core.so'

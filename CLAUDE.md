@@ -47,6 +47,11 @@ drift, it won't happen automatically like it would in one shared codebase.
 superseding ADR before assuming which phase applies. If unclear, ask rather
 than guessing which architecture is currently in force.
 
+Status (2026-09-26): the core port is done — `/core` is Rust (ADR-0006), C ABI
+unchanged and checked by `core/tools/abi_check.sh`, Android links it via
+cargo-ndk. Windows-side linkage/build (`core/CMakeLists.txt` wrapping cargo
+for `plugins/windows_receiver`) is written but pending a local Windows session.
+
 **Desktop build order: Linux first, Windows later, most of it shared.** The
 Rust desktop receiver (egui or iced, over `winit`) is being built and tested
 on Linux first, in a cloud sandbox with no Windows machine available. This

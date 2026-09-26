@@ -1,0 +1,14 @@
+[package]
+name = "lenny_vcam"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+description = "IVirtualCamera: the OS virtual camera behind one trait. v4l2loopback on Linux, null (file) backend anywhere."
+license = "UNLICENSED"
+publish = false
+
+[dependencies]
+log = "0.4"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"

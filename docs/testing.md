@@ -1,13 +1,15 @@
 # Testing
 
 Automated:
-- `core/`: `lenny_tests` (wire format, test vectors, full sessions over localhost TCP). CI runs it on MSVC, GCC,
-  ASan/UBSan and TSan.
+- `core/`: `cargo test -p lenny_core` (wire format, test vectors, full sessions over localhost TCP, struct layouts).
+  `core/tools/abi_check.sh` (cbindgen header vs lenny.h). `core/tests/c_abi/`: the C++ session test against the Rust
+  library, under ASan/UBSan in CI.
+- `vcam/`: `cargo test -p lenny_vcam` (compose/rotate/letterbox, placeholder, null backend, v4l2 ioctl numbers).
 - `app/`: `flutter test`.
 - `plugins/windows_receiver/windows/test/nv12_test.cpp`: preview converter (rotation + letterbox).
 
 Tools:
-- `core/build/lenny_probe [port] [seconds]`: headless receiver that auto-accepts phones and prints fps, bitrate,
+- `cargo run --release --bin lenny_probe -- [port] [seconds]`: headless receiver that auto-accepts phones and prints fps, bitrate,
   keyframes, RTT and latency once a second. Use it to test a sender without the desktop app, and for soak tests (M6).
 - Emulator: the phone reaches the PC at `10.0.2.2`. The AVD's back camera should be `virtualscene`.
 
