@@ -47,6 +47,25 @@ drift, it won't happen automatically like it would in one shared codebase.
 superseding ADR before assuming which phase applies. If unclear, ask rather
 than guessing which architecture is currently in force.
 
+**Desktop build order: Linux first, Windows later, most of it shared.** The
+Rust desktop receiver (egui or iced, over `winit`) is being built and tested
+on Linux first, in a cloud sandbox with no Windows machine available. This
+is not a Linux-only detour: `winit`-based custom window chrome (the
+borderless window + hand-drawn title bar from `docs/design.md`) works the
+same way on Windows and Linux, so that UI layer is expected to carry over to
+Windows with little to no change. The one genuinely OS-specific piece is the
+virtual camera backend, already isolated behind `IVirtualCamera`:
+`v4l2loopback` on Linux now, DirectShow + `MFCreateVirtualCamera` on Windows
+later. Because `v4l2loopback` is a kernel module, it likely can't be loaded
+inside a sandboxed container at all — a "null" `IVirtualCamera` backend
+(writes decoded frames to a file/log instead of a real device) exists
+specifically so the rest of the pipeline (capture → encode → network →
+decode) can be built and tested without kernel privileges. The real
+`v4l2loopback` wiring and, later, the Windows backend both get implemented
+and tested locally, using the null-backend-validated pipeline as the known-
+good base to build on top of — port the *shape* of the Linux
+`IVirtualCamera` implementation, not the syscalls themselves.
+
 ## Non-negotiable engineering rules (apply in both phases)
 
 - **Auto mode is the default, always.** Continuous autofocus, auto exposure/
