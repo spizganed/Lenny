@@ -62,6 +62,8 @@ if (-not (Test-Path $img)) {
 }
 & $qemuImg convert -f qcow2 -O vhdx -o subformat=dynamic $img $vhdx
 if ($LASTEXITCODE) { throw "qemu-img convert failed" }
+# qemu-img writes a sparse file; Hyper-V refuses to resize one (0xC03A001A).
+fsutil sparse setflag $vhdx 0 | Out-Null
 Resize-VHD -Path $vhdx -SizeBytes ([long]$DiskGB * 1GB)
 
 # ---- 3. cloud-init seed ISO (NoCloud, volume label "cidata") ----

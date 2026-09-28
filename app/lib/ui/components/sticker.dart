@@ -155,10 +155,14 @@ class StickerButton extends StatelessWidget {
       fill: fill,
       shadow: shadow,
       height: kind == ButtonKind.neutral ? 52 : 56,
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        if (icon != null) ...[Icon(icon, size: 20, color: color), const SizedBox(width: 10)],
-        Flexible(child: Text(label, style: _T.button(color), overflow: TextOverflow.ellipsis)),
-      ]),
+      // Narrow phones and big system fonts: shrink the label to fit rather than cut it ("Scan …").
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          if (icon != null) ...[Icon(icon, size: 20, color: color), const SizedBox(width: 10)],
+          Text(label, style: _T.button(color)),
+        ]),
+      ),
     );
   }
 }
@@ -179,10 +183,13 @@ class ToggleSticker extends StatelessWidget {
       selected: on,
       fill: on ? _T.mint : _T.well,
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        if (on) ...[Icon(Icons.check_rounded, size: 20, color: fg), const SizedBox(width: 8)],
-        Flexible(child: Text(label, style: _T.button(fg), overflow: TextOverflow.ellipsis)),
-      ]),
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          if (on) ...[Icon(Icons.check_rounded, size: 20, color: fg), const SizedBox(width: 8)],
+          Text(label, style: _T.button(fg)),
+        ]),
+      ),
     );
   }
 }
@@ -260,8 +267,14 @@ class Segmented extends StatelessWidget {
                       onTap: () => onSelect(i),
                       child: ColoredBox(
                         color: i == selected ? _T.mint : _T.well,
-                        child: Center(
-                          child: Text(labels[i], style: _T.button(i == selected ? _T.ink : _T.text), maxLines: 1),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 6),
+                          child: Center(
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text(labels[i], style: _T.button(i == selected ? _T.ink : _T.text), maxLines: 1),
+                            ),
+                          ),
                         ),
                       ),
                     ),

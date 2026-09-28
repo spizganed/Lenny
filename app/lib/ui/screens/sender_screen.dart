@@ -210,7 +210,7 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Expanded(flex: 4, child: column([hero, gap, connection])),
+                  Expanded(flex: 3, child: column([hero, gap, connection])),
                   if (streaming) ...[
                     if (lensTorch.isNotEmpty)
                       Expanded(
@@ -240,8 +240,8 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 480),
                 child: column([
-                  title,
-                  const SizedBox(height: 12),
+                  // Connected, the camera card needs the room; the hero already says what's going on.
+                  if (!s.active) ...[title, const SizedBox(height: 12)],
                   hero,
                   gap,
                   connection,
@@ -266,7 +266,9 @@ class _StatusHero extends StatelessWidget {
     final s = state;
     final sub =
         s.error ??
-        (s.link == LinkState.streaming && s.lastHost != null ? 'to ${s.lastHost} · port ${s.lastPort}' : null);
+        (s.link == LinkState.streaming && s.lastHost != null
+            ? (compact ? '${s.lastHost}:${s.lastPort}' : 'to ${s.lastHost} · port ${s.lastPort}')
+            : null);
     return Sticker(
       padding: EdgeInsets.symmetric(horizontal: compact ? 16 : 22, vertical: compact ? 16 : 20),
       child: Semantics(
@@ -282,13 +284,15 @@ class _StatusHero extends StatelessWidget {
                   Text(statusText(s.link, s.reason, sender: true), style: LennyTokens.heading(compact ? 20 : 26)),
                   if (sub != null) ...[
                     const SizedBox(height: 4),
-                    // Errors are sentences; the address is a technical value.
-                    Text(
-                      sub,
-                      style: s.error != null
-                          ? LennyTokens.body()
-                          : LennyTokens.mono(size: 14, color: LennyTokens.textMuted),
-                    ),
+                    // Errors are sentences; the address is a technical value, kept on one line (shrunk, never split).
+                    if (s.error != null)
+                      Text(sub, style: LennyTokens.body())
+                    else
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(sub, style: LennyTokens.mono(size: 14, color: LennyTokens.textMuted)),
+                      ),
                   ],
                 ],
               ),

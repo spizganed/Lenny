@@ -45,10 +45,14 @@ Phone (3a), Honor X5c Plus, Honor Magic7 Lite. Zoom/Teams/Discord calls, OBS,
 (ADR-0010). Test records: `docs/testing.md`.
 
 Next:
-- Phone layout must adapt to any screen size: labels truncate in portrait on
-  the Honor X5c Plus ("Scan …", "Find P…", "USB"), and landscape needs rework.
-- Linux on real v4l2loopback: `tools/linux-test-vm.ps1` builds a Hyper-V VM
-  (never run yet; VirtualBox stalls with Hyper-V on).
+- Phone layout (2026-09-28): button/segment labels
+  shrink to fit instead of truncating, Focus label sits beside Auto|Manual,
+  wordmark hidden while connected in portrait, address on one line. Checked on
+  the Nothing emulating 360 dp and 300 dp @1.3 font; last build not yet looked
+  at on screen. Still to confirm on the real Honor X5c Plus, portrait + landscape.
+- Linux on real v4l2loopback: `tools/linux-test-vm.ps1` builds a Hyper-V VM.
+  First run 2026-09-28 failed at Resize-VHD (0xC03A001A: qemu-img's VHDX is
+  sparse); `fsutil sparse setflag` added after the convert, not yet re-run.
 - Phone: lock-screen streaming untested (testing.md M2 row 9).
 - One vcam size (1280×720); add 1080p once the desktop writes a 1080p canvas.
   If both cameras showing in MF-aware apps confuses people, revisit (R5).

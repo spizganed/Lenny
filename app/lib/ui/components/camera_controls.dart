@@ -59,16 +59,20 @@ class _ModeControlsState extends State<ModeControls> {
     final manual = _manual || widget.controls.focusManual;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       if (widget.caps.has(LENNY_CAP_FOCUS)) ...[
-        Text('Focus', style: LennyTokens.button()),
-        const SizedBox(height: 10),
-        Segmented(
-          labels: const ['Auto', 'Manual'],
-          selected: manual ? 1 : 0,
-          onSelect: (i) {
-            setState(() => _manual = i == 1);
-            if (i == 0 && widget.controls.focusManual) widget.onCommand(Commands.focusAuto);
-          },
-        ),
+        // Label beside the switch, not above: one row less, so landscape fits without scrolling.
+        Row(children: [
+          SizedBox(width: 92, child: Text('Focus', style: LennyTokens.button())),
+          Expanded(
+            child: Segmented(
+              labels: const ['Auto', 'Manual'],
+              selected: manual ? 1 : 0,
+              onSelect: (i) {
+                setState(() => _manual = i == 1);
+                if (i == 0 && widget.controls.focusManual) widget.onCommand(Commands.focusAuto);
+              },
+            ),
+          ),
+        ]),
         if (manual) ...[
           const SizedBox(height: 14),
           Text(
