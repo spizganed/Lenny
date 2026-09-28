@@ -196,6 +196,10 @@ default **Auto** control state (protocol.md §6.9: every connect and reconnect s
 - Two modes, Auto and Manual (protocol.md §6.9). Tap-to-focus (Manual): receiver sends `CONTROL focus_at(x,y)` in
   normalized upright coords. Sender maps it to an AF/AE region in the visible part of the active array, triggers AF
   and holds focus there until Auto. Every connect and reconnect starts in Auto.
+- 60 fps: normal AE ranges usually stop at 30, so 60 fps modes come from the high-speed list
+  (`CONSTRAINED_HIGH_SPEED_VIDEO`) and stream in a constrained high-speed session (request bursts, fps range 60..120,
+  encoder capped with `KEY_MAX_FPS_TO_ENCODER`). Offered modes are exact 16:9 and 4:3 only. A mode the encoder or
+  camera refuses is retried once after 500 ms, then dropped for the nearest one (never a crash).
 - Capabilities per lens (sent in CAPS, protocol 1.1): the modes each lens can stream, straight from its
   StreamConfigurationMap, AE fps ranges and the AVC encoder, no hardcoded size list; and its zoom range
   (`CONTROL_ZOOM_RATIO_RANGE`, or 1..`SCALER_AVAILABLE_MAX_DIGITAL_ZOOM` before API 30, crop only). Discovery runs at
@@ -322,6 +326,8 @@ backends.
 - **Window**: borderless (`with_decorations(false)`); the title bar is drawn per docs/design.md and wired to real
   viewport commands: minimize, maximize/restore, close, `StartDrag` on the bar, double-click to maximize,
   `BeginResize` on the window edges. Same winit calls on Windows.
+- **Renderer**: wgpu on DirectX 12 on Windows, OpenGL (glow) on Linux. On Windows + NVIDIA, OpenGL spent 3x the UI
+  thread's CPU in the driver's buffer swap and the app felt laggy (2026-09-27).
 - **Layout**: computed from the window size every frame (fractions + clamps). Wide: preview hero + a control column
   (31 % of the width, 340–440 px). Narrow (< 1000 px): one scrolling column.
 - **Engine** (`receiver.rs`): the core receiver session; callbacks only queue (bounded, drop → keyframe request).

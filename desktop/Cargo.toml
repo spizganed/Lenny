@@ -1,6 +1,6 @@
 [package]
 name = "lenny_desktop"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 rust-version = "1.85"
 description = "Lenny Desktop: receives the phone's stream, shows it, and feeds the OS virtual camera."
@@ -12,7 +12,7 @@ name = "lenny-desktop"
 path = "src/main.rs"
 
 [dependencies]
-eframe = { version = "0.32.3", default-features = false, features = ["glow", "wayland", "x11", "default_fonts", "accesskit"] }
+eframe = { version = "0.32.3", default-features = false, features = ["wayland", "x11", "default_fonts", "accesskit"] }
 env_logger = "0.11.11"
 if-addrs = "0.15.0"
 lenny_core = { path = "../core" }
@@ -21,3 +21,13 @@ log = "0.4.34"
 openh264 = "0.9.8"
 png = "0.18.1"
 qrcode = { version = "0.14.1", default-features = false }
+
+# Renderer. Windows: wgpu on DirectX 12. OpenGL there (NVIDIA) cost 3x the UI thread's CPU in the driver's buffer swap,
+# which made the app feel laggy.
+[target.'cfg(windows)'.dependencies]
+eframe = { version = "0.32.3", default-features = false, features = ["wgpu"] }
+wgpu = { version = "25.0.2", default-features = false, features = ["dx12", "wgsl"] } # eframe enables no wgpu backend
+
+# Linux: OpenGL (runs on Mesa's software renderer too, which the Xvfb screenshot runs use).
+[target.'cfg(not(windows))'.dependencies]
+eframe = { version = "0.32.3", default-features = false, features = ["glow"] }

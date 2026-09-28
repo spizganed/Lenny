@@ -2,6 +2,8 @@ package com.spizganed.android_camera
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -53,5 +55,10 @@ class PipelineMathTest {
     @Test fun aspectKeyGroups() {
         assertEquals(16 to 9, Pipeline.aspectKey(1280, 720))
         assertEquals(4 to 3, Pipeline.aspectKey(4000, 3000))
+    }
+
+    @Test fun onlyWebcamShapes() {
+        assertTrue(Pipeline.webcamShape(3840, 2160) && Pipeline.webcamShape(1440, 1080))
+        assertFalse(Pipeline.webcamShape(4080, 2296) || Pipeline.webcamShape(3280, 2464) || Pipeline.webcamShape(1080, 1080))
     }
 }

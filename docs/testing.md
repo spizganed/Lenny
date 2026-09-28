@@ -20,6 +20,13 @@ Automated:
 Tools:
 - `cargo run --release --bin lenny_probe -- [port] [seconds]`: headless receiver that auto-accepts phones and prints fps, bitrate,
   keyframes, RTT and latency once a second. Use it to test a sender without the desktop app, and for soak tests (M6).
+- `lenny_probe [port] 0 --sweep`: selects every lens and every mode the phone lists and prints what each delivers
+  (ok / fell back / DISCONNECTED). A phone compatibility check. A phone that can't reach the PC (e.g. the PC is on
+  another phone's tethering) connects over wireless adb: `adb reverse tcp:47474 tcp:47474`, PC address `127.0.0.1`.
+  2026-09-27, Honor X5c Plus (NLA-LX1, Helio G85, Android 15): all 56 modes ok on Back and Front (2560x1440 down to
+  640x480, 15/20/24/30 fps); no high-speed video, so no 60 fps offered. 2026-09-28 same result over USB adb. Known:
+  at a fixed AE range [30,30] its HAL caps ISO at ~231 (indoors ~5x darker than 24 fps, which gets ISO 850 at 40 ms);
+  [5,30] is bright but drops to 20 fps. Kept [30,30]: a phone limit, 24 fps is the brighter choice there.
 - Emulator: the phone reaches the PC at `10.0.2.2`. The AVD's back camera should be `virtualscene`. Needs hardware
   acceleration (KVM / HAXM / Hyper-V); the cloud sandbox has none, so it isn't used there.
 - Fake phone: `cargo run -p lenny_desktop --example fake_phone -- <host> <port> [--portrait]`: a synthetic sender

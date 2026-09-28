@@ -1,11 +1,14 @@
 //! lenny_probe: headless receiver for testing senders without the desktop app (and for soak tests).
-//! Auto-accepts any phone and prints one line of stats per second.  Usage: lenny_probe [port] [seconds]
+//! Auto-accepts any phone and prints one line of stats per second.  Usage: lenny_probe [port] [seconds] [--sweep]
+//! --sweep: once streaming, select every lens and every mode it lists, one after another, and print what each really
+//! delivers (a phone compatibility check: modes that fall back, stall or crash the phone app).
 
 use std::os::raw::{c_char, c_void};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicI32, AtomicPtr, Ordering::Relaxed};
 use std::time::Duration;
 
+use lenny_core::session::Session;
 use lenny_core::*;
 
 static KEYFRAMES: AtomicI32 = AtomicI32::new(0);
@@ -71,6 +74,11 @@ fn main() {
             std::process::exit(1);
         }
         println!("listening on {}", lenny_receiver_port(rx));
+        if args.iter().any(|a| a == "--sweep") {
+            sweep(&*(rx as *const Session)); // lenny_session* is a Box<Session> (abi.rs)
+            lenny_session_destroy(rx);
+            return;
+        }
         let mut last = lenny_stats::default();
         let mut t = 0;
         while seconds == 0 || t < seconds {
@@ -93,5 +101,61 @@ fn main() {
             t += 1;
         }
         lenny_session_destroy(rx);
+    }
+}
+
+/// Waits up to `secs` for the phone to be streaming. False = it didn't come (back).
+fn wait_streaming(s: &Session, secs: u64) -> bool {
+    for _ in 0..secs * 10 {
+        if s.state() == LENNY_STATE_STREAMING as i32 && s.peer_caps().is_some() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    false
+}
+
+/// Frames per second over `secs`, and whether the phone stayed connected the whole time.
+fn measure(s: &Session, secs: u64) -> (f64, bool) {
+    let start = s.stats().frames;
+    let mut ok = true;
+    for _ in 0..secs * 10 {
+        std::thread::sleep(Duration::from_millis(100));
+        ok &= s.state() == LENNY_STATE_STREAMING as i32;
+    }
+    ((s.stats().frames - start) as f64 / secs as f64, ok)
+}
+
+fn sweep(s: &Session) {
+    println!("waiting for a phone...");
+    if !wait_streaming(s, 600) {
+        return println!("no phone");
+    }
+    let caps = s.peer_caps().unwrap();
+    let fmt = |m: &lenny_mode| format!("{}x{}@{}", m.width, m.height, m.fps_num / m.fps_den.max(1));
+    for lens in &caps.lenses {
+        let label = String::from_utf8_lossy(&lens.label).to_string();
+        let modes = if lens.modes.is_empty() { &caps.modes } else { &lens.modes };
+        println!("\n== lens {} \"{label}\": {}", lens.id, modes.iter().map(fmt).collect::<Vec<_>>().join(" "));
+        for m in modes {
+            if !wait_streaming(s, 20) {
+                return println!("phone gone (crashed or disconnected), sweep stopped");
+            }
+            let mut c =
+                lenny_control { cmd: LENNY_CTL_SELECT_LENS as u16, value: lens.id as i32, ..Default::default() };
+            s.send_control(&mut c);
+            std::thread::sleep(Duration::from_millis(1500));
+            let (_, cur) = s.stream_settings();
+            s.select_stream(&lenny_stream_settings { mode: *m, ..cur });
+            std::thread::sleep(Duration::from_secs(2)); // switch + first keyframe
+            let (fps, stayed) = measure(s, 3);
+            let (_, got) = s.stream_settings();
+            let note = match (stayed, got.mode == *m) {
+                (false, _) => "DISCONNECTED",
+                (true, true) => "ok",
+                (true, false) => "fell back",
+            };
+            println!("  asked {:<14} got {:<14} {fps:>5.1} fps  {note}", fmt(m), fmt(&got.mode));
+        }
     }
 }

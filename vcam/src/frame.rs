@@ -1,6 +1,6 @@
 //! I420 helpers shared by every backend and the desktop preview: rotate decoded frames upright and letterbox them
 //! into the fixed virtual-camera canvas, convert that canvas to RGBA, and draw the "waiting for phone" placeholder.
-// ponytail: CPU, nearest neighbour (~2-4 ms per 720p frame in release). Move to the GPU if 1080p60 ever matters.
+// ponytail: CPU, nearest neighbour, table lookups. Move to the GPU if 4K60 ever matters.
 
 /// Bytes in a tightly packed I420 frame.
 pub fn i420_size(w: usize, h: usize) -> usize {
@@ -67,49 +67,58 @@ const BAR: (u8, u8, u8) = (16, 128, 128); // black, limited range
 /// Rotate `src` upright (`rotation` = quarter turns clockwise, protocol.md §6.8) and letterbox it into `dst`, a
 /// packed out_w x out_h I420 canvas.
 pub fn compose_i420(src: &I420, rotation: u8, dst: &mut [u8], out_w: usize, out_h: usize) {
-    let (w, h) = (src.width, src.height);
-    let (rw, rh) = upright(w, h, rotation);
+    let (rw, rh) = upright(src.width, src.height, rotation);
     let f = fit(rw, rh, out_w, out_h);
-    // Source pixel for canvas pixel (ox, oy) inside the fitted rect, in a plane subsampled by `sub`.
-    let map = |ox: usize, oy: usize, sub: usize| -> (usize, usize) {
-        let rx = (ox - f.x0 / sub) * rw / (f.w / sub).max(1);
-        let ry = (oy - f.y0 / sub) * rh / (f.h / sub).max(1);
-        let (rx, ry) = (rx.min(rw - 1), ry.min(rh - 1));
-        let (x, y) = match rotation & 3 {
-            0 => (rx, ry),
-            1 => (ry, h - 1 - rx),
-            2 => (w - 1 - rx, h - 1 - ry),
-            _ => (w - 1 - ry, rx),
-        };
-        (x / sub, y / sub)
-    };
     let (yp, uvp) = dst.split_at_mut(out_w * out_h);
     let (cw, ch) = (out_w.div_ceil(2), out_h.div_ceil(2));
     let (up, vp) = uvp.split_at_mut(cw * ch);
-    for oy in 0..out_h {
-        let row = &mut yp[oy * out_w..(oy + 1) * out_w];
-        let inside_y = oy >= f.y0 && oy < f.y0 + f.h;
-        for (ox, d) in row.iter_mut().enumerate() {
-            *d = if inside_y && ox >= f.x0 && ox < f.x0 + f.w {
-                let (x, y) = map(ox, oy, 1);
-                src.y[y * src.y_stride + x]
-            } else {
-                BAR.0
-            };
+    compose_plane(src, rotation, &f, 1, src.y, src.y_stride, yp, out_w, out_h, BAR.0);
+    compose_plane(src, rotation, &f, 2, src.u, src.uv_stride, up, cw, ch, BAR.1);
+    compose_plane(src, rotation, &f, 2, src.v, src.uv_stride, vp, cw, ch, BAR.2);
+}
+
+/// One plane, subsampled by `sub`. Each source offset = a column part + a row part, both looked up from tables
+/// built once per call, so a pixel costs one add and one load (per-pixel divisions cost ~8 ms per frame).
+#[allow(clippy::too_many_arguments)]
+fn compose_plane(
+    src: &I420,
+    rotation: u8,
+    f: &Fit,
+    sub: usize,
+    plane: &[u8],
+    stride: usize,
+    out: &mut [u8],
+    out_w: usize,
+    out_h: usize,
+    bar: u8,
+) {
+    let (w, h) = (src.width, src.height);
+    let (rw, rh) = upright(w, h, rotation);
+    let (x0, x1) = (f.x0 / sub, ((f.x0 + f.w) / sub).min(out_w));
+    let (y0, y1) = (f.y0 / sub, ((f.y0 + f.h) / sub).min(out_h));
+    let (fw, fh) = ((f.w / sub).max(1), (f.h / sub).max(1));
+    // Upright picture coordinate for an output column / row, then its source offset part for this rotation.
+    let rx = |ox: usize| ((ox - x0) * rw / fw).min(rw - 1);
+    let ry = |oy: usize| ((oy - y0) * rh / fh).min(rh - 1);
+    let (col, row): (Vec<usize>, Vec<usize>) = match rotation & 3 {
+        0 => ((x0..x1).map(|o| rx(o) / sub).collect(), (y0..y1).map(|o| ry(o) / sub * stride).collect()),
+        1 => ((x0..x1).map(|o| (h - 1 - rx(o)) / sub * stride).collect(), (y0..y1).map(|o| ry(o) / sub).collect()),
+        2 => (
+            (x0..x1).map(|o| (w - 1 - rx(o)) / sub).collect(),
+            (y0..y1).map(|o| (h - 1 - ry(o)) / sub * stride).collect(),
+        ),
+        _ => ((x0..x1).map(|o| rx(o) / sub * stride).collect(), (y0..y1).map(|o| (w - 1 - ry(o)) / sub).collect()),
+    };
+    for (oy, line) in out.chunks_exact_mut(out_w).take(out_h).enumerate() {
+        if oy < y0 || oy >= y1 {
+            line.fill(bar);
+            continue;
         }
-    }
-    for oy in 0..ch {
-        let inside_y = oy >= f.y0 / 2 && oy < (f.y0 + f.h) / 2;
-        for ox in 0..cw {
-            let i = oy * cw + ox;
-            if inside_y && ox >= f.x0 / 2 && ox < (f.x0 + f.w) / 2 {
-                let (x, y) = map(ox, oy, 2);
-                up[i] = src.u[y * src.uv_stride + x];
-                vp[i] = src.v[y * src.uv_stride + x];
-            } else {
-                up[i] = BAR.1;
-                vp[i] = BAR.2;
-            }
+        let r = row[oy - y0];
+        line[..x0].fill(bar);
+        line[x1..].fill(bar);
+        for (d, c) in line[x0..x1].iter_mut().zip(&col) {
+            *d = plane[r + c];
         }
     }
 }
@@ -119,12 +128,11 @@ pub fn i420_to_rgba(src: &[u8], w: usize, h: usize, out: &mut [u8]) {
     let cw = w.div_ceil(2);
     let (yp, uvp) = src.split_at(w * h);
     let (up, vp) = uvp.split_at(cw * h.div_ceil(2));
-    for y in 0..h {
-        for x in 0..w {
-            let c = 298 * (yp[y * w + x] as i32 - 16);
-            let i = (y / 2) * cw + x / 2;
-            let (u, v) = (up[i] as i32 - 128, vp[i] as i32 - 128);
-            let d = &mut out[(y * w + x) * 4..][..4];
+    for (y, (yl, ol)) in yp.chunks_exact(w).zip(out.chunks_exact_mut(w * 4)).enumerate() {
+        let (ul, vl) = (&up[(y / 2) * cw..][..cw], &vp[(y / 2) * cw..][..cw]);
+        for (x, (&l, d)) in yl.iter().zip(ol.chunks_exact_mut(4)).enumerate() {
+            let c = 298 * (l as i32 - 16);
+            let (u, v) = (ul[x / 2] as i32 - 128, vl[x / 2] as i32 - 128);
             d[0] = ((c + 459 * v + 128) >> 8).clamp(0, 255) as u8;
             d[1] = ((c - 55 * u - 136 * v + 128) >> 8).clamp(0, 255) as u8;
             d[2] = ((c + 541 * u + 128) >> 8).clamp(0, 255) as u8;

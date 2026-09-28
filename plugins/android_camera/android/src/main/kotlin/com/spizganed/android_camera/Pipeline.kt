@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Rect
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraConstrainedHighSpeedCaptureSession
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CameraMetadata
@@ -59,6 +60,7 @@ class Pipeline(private val context: Context) : SenderListener {
     private var opening: String? = null // camera id being opened
     private var session: CameraCaptureSession? = null
     private var target: Surface? = null
+    private var highSpeed: Range<Int>? = null // set: the session is a constrained high-speed one at this fps range
     private var sessionGen = 0
     private var bound: Settings? = null
     private var outSize = Size(1, 1)
@@ -417,14 +419,19 @@ class Pipeline(private val context: Context) : SenderListener {
         val d = device ?: return
         val s = bound ?: return
         val size = pickSize(lens, s.width, s.height)
-        val codec = try {
-            createEncoder(size.width, size.height, s.fps, s.bitrateKbps)
+        val hs = highSpeedRange(lens, size, s.fps)
+        var codec: MediaCodec? = null
+        val surface = try {
+            codec = createEncoder(size.width, size.height, s.fps, s.bitrateKbps)
+            codec.createInputSurface().also { codec.start() }
         } catch (e: Exception) {
-            Log.w(TAG, "encoder setup failed", e)
-            return
+            // The hardware encoder refuses modes it listed as supported (over its load budget, e.g. 4K while the
+            // previous encoder is still being released). Never crash: retry once, then step down.
+            Log.w(TAG, "encoder start failed at ${size.width}x${size.height}@${s.fps}", e)
+            runCatching { codec?.release() }
+            return modeFailed(s)
         }
-        val surface = codec.createInputSurface()
-        codec.start()
+        startRetried = false
         encoder = codec
         outSize = size
         ptsCalibrated = false // new camera: its timestamp clock may differ (see calibratePts)
@@ -443,26 +450,57 @@ class Pipeline(private val context: Context) : SenderListener {
         val releaseOnCodecThread = { if (!codecHandler.post(release)) release.run() } // thread gone after stop()
         val gen = ++sessionGen
         try {
-            @Suppress("DEPRECATION") // the SessionConfiguration overload is API 28+
-            d.createCaptureSession(listOf(surface), object : CameraCaptureSession.StateCallback() {
+            val callback = object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(cs: CameraCaptureSession) {
                     if (gen != sessionGen || stopped) return cs.close()
                     session = cs
                     target = surface
+                    highSpeed = hs
                     applyRequest()
                 }
 
                 override fun onConfigureFailed(cs: CameraCaptureSession) {
-                    Log.w(TAG, "capture session failed for ${d.id} ${size.width}x${size.height}")
+                    Log.w(TAG, "capture session failed for ${d.id} ${size.width}x${size.height}@${s.fps}")
                     releaseOnCodecThread()
+                    if (gen == sessionGen && !stopped) modeFailed(s)
                 }
 
                 override fun onClosed(cs: CameraCaptureSession) = releaseOnCodecThread()
-            }, main)
+            }
+            // 60 fps: phones reach it only in a constrained high-speed session (normal AE ranges stop at 30).
+            @Suppress("DEPRECATION") // the SessionConfiguration overloads are API 28+
+            if (hs != null) {
+                d.createConstrainedHighSpeedCaptureSession(listOf(surface), callback, main)
+            } else {
+                d.createCaptureSession(listOf(surface), callback, main)
+            }
         } catch (e: Exception) {
             Log.w(TAG, "capture session setup failed", e)
             releaseOnCodecThread()
+            modeFailed(s)
         }
+    }
+
+    private var startRetried = false
+
+    /** The encoder or the camera session refused [s]: retry once (resources still being freed), then step down. */
+    private fun modeFailed(s: Settings) {
+        if (!startRetried) {
+            startRetried = true
+            main.postDelayed({ if (bound == s && session == null && !stopped) createSession() }, 500)
+            return
+        }
+        startRetried = false
+        // ponytail: dropped until the next Connect rediscovers modes; the receiver's picker still lists it and the
+        // phone answers a pick with the nearest working mode.
+        val l = lenses[s.lens.coerceIn(lenses.indices)]
+        val left = l.modes.toList().chunked(4).filterNot { it[0] == s.width && it[1] == s.height && it[2] == s.fps }
+        if (left.isEmpty()) return
+        l.modes = left.flatten().toIntArray()
+        val m = nearestMode(l.modes, s.width, s.height, s.fps)
+        val n = s.copy(width = m[0], height = m[1], fps = m[2])
+        LennyNative.updateStream(handle, n.width, n.height, n.fps, n.bitrateKbps)
+        bindCamera(n)
     }
 
     private fun closeSession() {
@@ -470,6 +508,7 @@ class Pipeline(private val context: Context) : SenderListener {
         session?.close()
         session = null
         target = null
+        highSpeed = null
     }
 
     /** The one repeating request, rebuilt from [state] after every change. */
@@ -488,7 +527,7 @@ class Pipeline(private val context: Context) : SenderListener {
             b.set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, CameraMetadata.CONTROL_AE_ANTIBANDING_MODE_AUTO)
             // Stabilisation looks frames ahead: latency we don't want in a webcam.
             b.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
-            fpsRange(l.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES), bound?.fps ?: 30)
+            (highSpeed ?: fpsRange(l.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES), bound?.fps ?: 30))
                 ?.let { b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
             b.set(CaptureRequest.CONTROL_AE_LOCK, state.aeLock)
             b.set(CaptureRequest.CONTROL_AWB_LOCK, state.awbLock)
@@ -508,10 +547,19 @@ class Pipeline(private val context: Context) : SenderListener {
             } else if (CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_VIDEO in afModes) {
                 b.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
             }
-            cs.setRepeatingRequest(b.build(), afWatcher, main)
-            if (trigger) {
-                b.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_START)
-                cs.capture(b.build(), null, main)
+            if (cs is CameraConstrainedHighSpeedCaptureSession) {
+                // High-speed sessions only take bursts the session builds itself.
+                cs.setRepeatingBurst(cs.createHighSpeedRequestList(b.build()), afWatcher, main)
+                if (trigger) {
+                    b.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_START)
+                    cs.captureBurst(cs.createHighSpeedRequestList(b.build()), null, main)
+                }
+            } else {
+                cs.setRepeatingRequest(b.build(), afWatcher, main)
+                if (trigger) {
+                    b.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_START)
+                    cs.capture(b.build(), null, main)
+                }
             }
         } catch (e: Exception) { // session closed under us: the next session applies [state] anyway
             Log.w(TAG, "capture request failed", e)
@@ -565,8 +613,16 @@ class Pipeline(private val context: Context) : SenderListener {
             setInteger(MediaFormat.KEY_PRIORITY, 0) // realtime
             if (Build.VERSION.SDK_INT >= 29) setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
             if (Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+            // A high-speed session delivers up to 120 fps (its ranges are 60..120 at best): encode only [fps] of them.
+            if (Build.VERSION.SDK_INT >= 29) setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, fps.toFloat())
         }
         val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+        // Baseline: the desktop's openh264 decodes only (Constrained) Baseline reliably. Qualcomm encoders default to
+        // it, MediaTek ones to High, which openh264 rejects every few frames (Honor X5c Plus: ~6 of 30 fps shown).
+        val baseline = MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline
+        if (runCatching { codec.codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC).profileLevels.any { it.profile == baseline } }.getOrDefault(false)) {
+            format.setInteger(MediaFormat.KEY_PROFILE, baseline)
+        }
         codec.setCallback(object : MediaCodec.Callback() {
             override fun onInputBufferAvailable(codec: MediaCodec, index: Int) = Unit // surface input
 
@@ -736,7 +792,7 @@ class Pipeline(private val context: Context) : SenderListener {
          * What [l] can stream (w, h, fps, 1 flattened), straight from the camera and the encoder, nothing assumed:
          * every size the camera outputs to MediaCodec (>= 240 lines), at every frame rate the camera can hold there
          * (an AE target range topping out exactly at it, 15..60, and a short enough minimum frame duration) that an
-         * AVC encoder accepts. Per aspect ratio the 4 largest sizes, 4 aspect ratios at most (by largest size), so
+         * AVC encoder accepts. Only 16:9 and 4:3 ([webcamShape]); per shape the largest size plus the standard heights, so
          * the list fits a receiver's picker; biggest first.
          */
         private fun supportedModes(l: Lens): IntArray {
@@ -747,9 +803,10 @@ class Pipeline(private val context: Context) : SenderListener {
                 .filter { it.isEncoder && MediaFormat.MIMETYPE_VIDEO_AVC in it.supportedTypes }
                 .mapNotNull { runCatching { it.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC).videoCapabilities }.getOrNull() }
             val sizes = map.getOutputSizes(MediaCodec::class.java).orEmpty()
-                .filter { it.height >= 240 && encoders.any { e -> e.isSizeSupported(it.width, it.height) } }
+                .filter { webcamShape(it.width, it.height) && encoders.any { e -> e.isSizeSupported(it.width, it.height) } }
                 .sortedByDescending { it.width * it.height }
-                .groupBy { aspectKey(it.width, it.height) }.values.take(4).flatMap { it.take(4) }
+                .groupBy { aspectKey(it.width, it.height) }.values
+                .flatMap { g -> g.filterIndexed { i, sz -> i == 0 || sz.height in STANDARD_HEIGHTS } }
                 .sortedByDescending { it.width * it.height }
             val modes = mutableListOf<Int>()
             for (size in sizes) {
@@ -758,6 +815,15 @@ class Pipeline(private val context: Context) : SenderListener {
                     if (minFrameNs > 0 && minFrameNs > 1_000_000_000L / fps) continue
                     if (encoders.none { it.areSizeAndRateSupported(size.width, size.height, fps.toDouble()) }) continue
                     if (modes.size < MAX_MODES * 4) modes += listOf(size.width, size.height, fps, 1)
+                }
+            }
+            // 60 fps from the high-speed list: same shapes, and the encoder must take it.
+            if (highSpeedCapable(l)) {
+                for (size in map.highSpeedVideoSizes.orEmpty().filter { webcamShape(it.width, it.height) }) {
+                    val ok = map.getHighSpeedVideoFpsRangesFor(size).any { HIGH_SPEED_FPS in it } &&
+                        encoders.any { it.areSizeAndRateSupported(size.width, size.height, HIGH_SPEED_FPS.toDouble()) }
+                    val known = modes.chunked(4).any { it[0] == size.width && it[1] == size.height && it[2] == HIGH_SPEED_FPS }
+                    if (ok && !known && modes.size < MAX_MODES * 4) modes += listOf(size.width, size.height, HIGH_SPEED_FPS, 1)
                 }
             }
             Log.i(TAG, "lens ${l.label} (${l.id}) modes: " + modes.chunked(4).joinToString { "${it[0]}x${it[1]}@${it[2]}" })
@@ -784,6 +850,27 @@ class Pipeline(private val context: Context) : SenderListener {
             fun my(y: Float) = ((y - (fh - fh / zr) / 2) * zr).roundToInt().coerceIn(0, H)
             return zr to intArrayOf(mx(cx - w / 2), my(cy - h / 2), mx(cx + w / 2), my(cy + h / 2))
         }
+
+        private val STANDARD_HEIGHTS = setOf(2160, 1440, 1080, 720, 480)
+        private const val HIGH_SPEED_FPS = 60
+
+        private fun highSpeedCapable(l: Lens) = l.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+            ?.contains(CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_CONSTRAINED_HIGH_SPEED_VIDEO) == true
+
+        /**
+         * The high-speed fps range for [size] at [fps], or null when the normal AE ranges already reach fps (or there's
+         * no high-speed mode for it). Prefers the highest lower bound (60..120 over 30..120): never slower than fps.
+         */
+        private fun highSpeedRange(l: Lens, size: Size, fps: Int): Range<Int>? {
+            val normal = l.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES).orEmpty()
+            if (normal.any { it.upper == fps } || !highSpeedCapable(l)) return null
+            val map = l.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return null
+            if (size !in map.highSpeedVideoSizes.orEmpty()) return null
+            return map.getHighSpeedVideoFpsRangesFor(size).filter { fps in it }.maxByOrNull { it.lower }
+        }
+
+        /** Exact 16:9 or 4:3. Cameras also list sensor-crop sizes (4080x2296, 3280x2464, 20:9, 1:1) no consumer expects. */
+        internal fun webcamShape(w: Int, h: Int) = w * 9 == h * 16 || w * 3 == h * 4
 
         /** Width:height reduced, so 1920x1080 and 1280x720 group together. */
         internal fun aspectKey(w: Int, h: Int): Pair<Int, Int> {
