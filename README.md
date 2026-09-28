@@ -15,7 +15,7 @@ the desktop app is where you pick the camera, resolution, frame rate, focus and 
 
 ## Status
 
-Alpha. **Android phone → Windows 10/11 PC** works end to end, including the virtual camera other apps see. The core
+Version 1.0. **Android phone → Windows 10/11 PC** works end to end, including the virtual camera other apps see. The core
 and the desktop app are Rust (ADR-0006, ADR-0007); the phone app is still Flutter for now.
 
 What works today:

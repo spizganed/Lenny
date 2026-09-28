@@ -1,6 +1,6 @@
 [package]
 name = "lenny_desktop"
-version = "0.3.0"
+version = "1.0.0"
 edition = "2021"
 rust-version = "1.85"
 description = "Lenny Desktop: receives the phone's stream, shows it, and feeds the OS virtual camera."

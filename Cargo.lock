@@ -1707,7 +1707,7 @@ dependencies = [
 
 [[package]]
 name = "lenny_desktop"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "eframe",
  "env_logger",
