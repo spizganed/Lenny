@@ -4,7 +4,7 @@ This file defines the visual language for every Lenny screen (desktop receiver a
 
 ## 1. The idea in one sentence
 
-Every interactive or grouping element is a flat, solid-colored "sticker": a thick dark outline, chunky rounded corners, and a hard offset shadow with zero blur. The sticker sits slightly above a dark dotted page and physically presses down into its shadow when tapped.
+Every interactive or grouping element is a flat, solid-colored "sticker": a thick dark outline, chunky rounded corners, and a hard offset shadow with zero blur. The sticker sits slightly above a plain dark page and physically presses down into its shadow when tapped.
 
 ## 2. Non-negotiable rules
 
@@ -15,7 +15,7 @@ Every interactive or grouping element is a flat, solid-colored "sticker": a thic
 5. **One color = one meaning.** Accent colors are functional, never decorative (see §3.2). If a color doesn't carry its meaning, the element uses a neutral surface.
 6. **Text on accent fills is always ink** (`#07081A`), never white.
 7. **Corners are chunky rounded** (14–20px). Full pills are reserved for status chips, switches, and segmented controls.
-8. **Background is always the dotted page**, never a flat app-bar color band. There is no colored AppBar; the header sits directly on the page.
+8. **Background is always the plain `page` color** (no dot grid or other texture, decided 2026-09-28), never an app-bar color band. There is no colored AppBar; the header sits directly on the page.
 
 ## 3. Tokens
 
@@ -25,7 +25,6 @@ Every interactive or grouping element is a flat, solid-colored "sticker": a thic
 |---|---|---|
 | `ink` | `#07081A` | Outlines, shadows, text on accent fills |
 | `page` | `#1A1D38` | Page background |
-| `pageDot` | `#2C3060` | Dot pattern on the page |
 | `surface` | `#262A4D` | Cards, neutral buttons in the header, chips |
 | `well` | `#0F1126` | Recessed areas inside cards: inputs, off toggles, stat tiles, slider track, preview frame |
 | `text` | `#F4F1E8` | Primary text (warm cream, not pure white) |
@@ -92,7 +91,7 @@ Rule: anything a user might copy or read as a number (IP, port, bitrate, latency
 
 ### 3.7 Page background
 
-Dot grid: `pageDot` dots of ~1.6px radius on a 24px grid (22px on mobile) over `page`. Implement with a `CustomPainter` behind the whole scaffold. It's subtle texture, not a pattern that competes with content.
+Plain `page`, nothing drawn on it. (A dot grid was dropped on 2026-09-28: the user didn't like it.)
 
 ## 4. Component recipes
 
@@ -153,9 +152,11 @@ Line icons, stroke width 2.5 (3 for check marks), round caps and joins, colored 
 
 ## 6. Layout patterns
 
-**Desktop receiver:** wordmark + platform tag + status chip on the left of the header; connection info chips and settings button on the right. Below: the preview hero takes all remaining width; a fixed ~380px control column on the right holds stacked cards (Camera → Focus & light → Exposure → Stream stats).
+**No scrolling.** Every screen fits its window: a maximized desktop window, a phone in portrait or landscape. The camera preview gives up space first; anything optional is folded behind a button.
 
-**Mobile sender:** header row (wordmark left, settings icon button right) → status hero card (big green dot, "Streaming" heading, mono "to IP · port" subline) → Connection card (inputs + full-width action button) → Camera card (segmented control, toggle grid, torch switch row, exposure slider). Single column, full width minus page padding.
+**Desktop receiver:** wordmark + platform tag + status chip on the left of the header, window buttons on the right. Below: the preview hero on the left (top-aligned, its real aspect ratio), cards on the right in two columns on wide windows (Connection → Camera → Focus & exposure | Video → Stream). Not connected, the Connection card shows the QR code first; Manual (IPs + port), USB ADB and USB tether sit behind one segmented control and unfold one at a time (tap the selected one again to fold it).
+
+**Mobile sender:** header row (wordmark left, settings icon button right) → status hero card (big green dot, "Streaming" heading, mono "to IP · port" subline) → Connection card (Scan QR + Find PCs, the found PCs, then Manual / USB ADB / USB tether folded behind one segmented control; only Disconnect while connected) → Camera card (segmented control, toggle grid, torch switch row, exposure slider). Single column, full width minus page padding.
 
 ## 7. Flutter implementation notes
 
@@ -165,7 +166,7 @@ Line icons, stroke width 2.5 (3 for check marks), round caps and joins, colored 
 - Put all values from §3 in a single `LennyTokens` class (colors, radii, shadow offsets, spacing) and a `ThemeData` with `useMaterial3: true` but with ripples disabled (`splashFactory: NoSplash.splashFactory`, transparent highlight/hover overlays). Press feedback comes from the sink, not ink splashes.
 - Override Material components (`FilledButton`, `SegmentedButton`, `Switch`, `Slider`, `TextField`) only if they can hit the spec exactly; otherwise use custom widgets. Stock Material shapes, elevation, and ripples must not leak through.
 - Slider: custom `SliderTheme` with a custom track shape (bordered pill, hard-edged lilac fill) and thumb shape (bordered circle with offset shadow), or a custom widget.
-- Dot background: one `CustomPainter` wrapping the scaffold body; scaffold `backgroundColor` = `page`.
+- Background: scaffold `backgroundColor` = `page`, nothing painted over it.
 - Keep text contrast ≥ 4.5:1: `text`/`textMuted` on `page`, `surface`, or `well`; ink on every accent.
 
 ## 8. Don'ts
@@ -177,4 +178,4 @@ Line icons, stroke width 2.5 (3 for check marks), round caps and joins, colored 
 - No accent used for decoration, and no more than one yellow action per view.
 - No pure white (`#FFFFFF`) or pure black backgrounds.
 - No fully rounded pill buttons for regular actions (pills are for status chips, switches, and segmented controls only).
-- No colored app bar band; the header lives on the dotted page.
+- No colored app bar band; the header lives on the page.

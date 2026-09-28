@@ -17,6 +17,8 @@ use crate::theme::{self as t, Kind};
 
 const TITLE_H: f32 = 68.0;
 const WIDE: f32 = 1000.0; // below this the layout is one scrolling column
+const TWO_COLUMNS: f32 = 1300.0; // from here the cards sit in two columns, so nothing scrolls
+const GAP: f32 = 2.0; // + the 14 px item spacing = 16 px between cards (design.md §3.5)
 
 pub struct App {
     engine: Result<Engine, String>,
@@ -24,6 +26,9 @@ pub struct App {
     preview_seq: u64,
     qr: Option<(String, TextureHandle)>,
     manual: bool,
+    /// Connection card: the other ways in (Manual, USB ADB, USB tether) stay folded until one is picked.
+    method: Option<usize>,
+    adb: crate::adb::Adb,
     /// Pan being dragged on the preview (sent at most every 80 ms and on release).
     pan: Option<(f32, f32)>,
     pan_sent: Instant,
@@ -62,6 +67,8 @@ impl App {
             preview_seq: 0,
             qr: None,
             manual: false,
+            method: None,
+            adb: Default::default(),
             pan: None,
             pan_sent: Instant::now(),
             wheel_zoom: None,
@@ -89,20 +96,41 @@ impl eframe::App for App {
         let w = ctx.screen_rect().width();
         let side_margin = if w < 700.0 { 16 } else { 28 };
         if w >= WIDE {
-            let side_w = (w * 0.31).clamp(340.0, 440.0);
+            // The preview gets what the cards leave. Wide windows: cards in two columns, so everything fits.
+            let two = w >= TWO_COLUMNS;
+            let side_w = if two { (w * 0.52).clamp(640.0, 920.0) } else { (w * 0.4).clamp(380.0, 460.0) };
             egui::SidePanel::right("controls")
                 .exact_width(side_w)
                 .resizable(false)
                 .show_separator_line(false)
                 .frame(egui::Frame::NONE.inner_margin(Margin { left: 0, right: side_margin, top: 4, bottom: 16 }))
                 .show(ctx, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| self.cards(ui));
+                    if two {
+                        ui.spacing_mut().item_spacing.x = 20.0;
+                        ui.columns(2, |c| {
+                            egui::ScrollArea::vertical().id_salt("a").show(&mut c[0], |ui| self.cards_left(ui));
+                            egui::ScrollArea::vertical().id_salt("b").show(&mut c[1], |ui| self.cards_right(ui));
+                        });
+                    } else {
+                        egui::ScrollArea::vertical().show(ui, |ui| self.cards_left(ui));
+                    }
                 });
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE.inner_margin(Margin { left: side_margin, right: 16, top: 4, bottom: 24 }))
                 .show(ctx, |ui| {
-                    let size = ui.available_size();
-                    self.preview(ui, size);
+                    if two {
+                        let size = ui.available_size();
+                        self.preview(ui, size);
+                    } else {
+                        // Narrower: the picture takes at most 45 % of the height, video + stream fill the space below it.
+                        let h = ui.available_height() * 0.45; // outside the scroll area: inside it is unbounded
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            let size = vec2(ui.available_width(), h);
+                            self.preview(ui, size);
+                            ui.add_space(GAP);
+                            self.cards_right(ui);
+                        });
+                    }
                 });
         } else {
             egui::CentralPanel::default()
@@ -115,13 +143,14 @@ impl eframe::App for App {
                 .show(ctx, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         let width = ui.available_width();
-                        // As tall as the picture needs at this width (its real aspect ratio), within 60 % of the window.
+                        // As tall as the picture needs at this width (its real aspect ratio), within 45 % of the window.
                         let aspect = self.video.as_ref().map_or(16.0 / 9.0, |v| v.size.0 as f32 / v.size.1 as f32);
                         let pad = 2.0 * (16.0 + t::BORDER) + t::SH_HERO;
-                        let h = ((width - pad) / aspect + pad).min(ctx.screen_rect().height() * 0.6).max(200.0);
+                        let h = ((width - pad) / aspect + pad).min(ctx.screen_rect().height() * 0.45).max(200.0);
                         self.preview(ui, vec2(width, h));
-                        ui.add_space(16.0);
-                        self.cards(ui);
+                        ui.add_space(GAP);
+                        self.cards_left(ui);
+                        self.cards_right(ui);
                     });
                 });
         }
@@ -309,8 +338,8 @@ impl App {
         let aspect = self.video.as_ref().map_or(16.0 / 9.0, |v| v.size.0 as f32 / v.size.1 as f32);
         let max = (area.size() - Vec2::splat(2.0 * PAD + t::SH_HERO)).max(Vec2::splat(40.0));
         let inner = if max.x / max.y > aspect { vec2(max.y * aspect, max.y) } else { vec2(max.x, max.x / aspect) };
-        let card =
-            Rect::from_center_size(area.center() - Vec2::splat(t::SH_HERO / 2.0), inner + Vec2::splat(2.0 * PAD));
+        let size = inner + Vec2::splat(2.0 * PAD);
+        let card = Rect::from_min_size(pos2(area.center().x - (size.x + t::SH_HERO) / 2.0, area.top()), size);
         t::paint_sticker(ui, card, t::WELL, t::R_CARD, t::SH_HERO, 0.0);
         let pic = card.shrink(PAD);
         let Ok(e) = &self.engine else {
@@ -437,6 +466,10 @@ fn norm(f: f32) -> u16 {
     (f.clamp(0.0, 1.0) * 65535.0) as u16
 }
 
+fn hint(ui: &mut Ui, text: &str) {
+    ui.label(RichText::new(text).color(t::TEXT_MUTED).font(t::body(14.0)));
+}
+
 fn empty_state(ui: &Ui, r: Rect, title: &str, sub: &str) {
     ui.painter().rect(r, CornerRadius::same(t::R_TILE), t::WELL, Stroke::new(t::BORDER, t::INK), StrokeKind::Inside);
     ui.painter().text(r.center() - vec2(0.0, 44.0), Align2::CENTER_CENTER, "📷", t::body(52.0), t::TEXT_FAINT);
@@ -453,7 +486,8 @@ fn is_auto(cs: &lenny_control_state) -> bool {
 // ---- cards --------------------------------------------------------------------------------------------------
 
 impl App {
-    fn cards(&mut self, ui: &mut Ui) {
+    /// Connection, then (streaming) camera and focus & exposure. Each card brings its gap.
+    fn cards_left(&mut self, ui: &mut Ui) {
         let Ok(e) = &self.engine else {
             t::card(ui, "Lenny Desktop", |ui| {
                 ui.label(RichText::new(self.engine.as_ref().err().cloned().unwrap_or_default()).color(t::CORAL));
@@ -461,17 +495,23 @@ impl App {
             return;
         };
         let streaming = e.session.state() == LENNY_STATE_STREAMING as i32;
-        let gap = 16.0;
         self.connection_card(ui);
+        ui.add_space(GAP);
         if streaming {
-            ui.add_space(gap);
             self.camera_card(ui);
-            ui.add_space(gap);
+            ui.add_space(GAP);
             self.mode_card(ui);
-            ui.add_space(gap);
-            self.video_card(ui);
+            ui.add_space(GAP);
         }
-        ui.add_space(gap);
+    }
+
+    /// (Streaming) video modes, then stream stats and the virtual camera.
+    fn cards_right(&mut self, ui: &mut Ui) {
+        let Ok(e) = &self.engine else { return };
+        if e.session.state() == LENNY_STATE_STREAMING as i32 {
+            self.video_card(ui);
+            ui.add_space(GAP);
+        }
         self.stream_card(ui);
     }
 
@@ -482,19 +522,20 @@ impl App {
             if streaming {
                 let (_, peer) = e.session.peer();
                 let (_, cs) = e.session.control_state();
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("📱").font(t::body(22.0)));
-                    ui.label(RichText::new(c_chars(&peer.name)).font(t::heading(22.0)));
+                // Phone | Disconnect on one row: the card stays short, so the column fits without scrolling.
+                let disconnect = ui.columns(2, |c| {
+                    c[0].label(RichText::new(format!("📱 {}", c_chars(&peer.name))).font(t::heading(20.0)));
                     if cs.battery <= 100 {
                         let charging = if cs.charging != 0 { " ⚡" } else { "" };
-                        ui.label(
-                            RichText::new(format!("{}%{charging}", cs.battery))
-                                .font(t::mono(15.0))
+                        c[0].label(
+                            RichText::new(format!("battery {}%{charging}", cs.battery))
+                                .font(t::mono(14.0))
                                 .color(t::TEXT_MUTED),
                         );
                     }
+                    t::button(&mut c[1], "Disconnect", Kind::Destructive, true).clicked()
                 });
-                if t::button(ui, "Disconnect", Kind::Destructive, true).clicked() {
+                if disconnect {
                     // GOODBYE(USER): the phone stops retrying. Listening restarts for the next phone.
                     e.session.disconnect();
                     let s = e.session.clone();
@@ -511,31 +552,46 @@ impl App {
                 }
                 return;
             }
-            // Not connected: the QR code (single-use token), then where to type it in by hand.
+            // Not connected: the QR code (single-use token) is the way in; the phone can also find this PC by itself.
+            // Manual, USB ADB and USB tether stay folded until picked (a second tap folds them again).
             let uri = e.pair_uri();
             if self.qr.as_ref().is_none_or(|(u, _)| *u != uri) {
                 self.qr = qr_texture(ui.ctx(), &uri).map(|tex| (uri.clone(), tex));
             }
             if let Some((_, tex)) = &self.qr {
                 // The QR sits in a flat white box with a quiet zone; no outline or shadow on the code itself.
-                let side = ui.available_width().min(260.0);
+                let side = ui.available_width().min(240.0);
                 let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), side), Sense::hover());
                 let box_ = Rect::from_center_size(r.center(), Vec2::splat(side));
                 ui.painter().rect_filled(box_, CornerRadius::same(t::R_TILE), Color32::from_rgb(0xFA, 0xFA, 0xF7));
                 egui::Image::new(tex).paint_at(ui, box_.shrink(side * 0.08));
             }
-            ui.label(
-                RichText::new("Scan with Lenny on your phone. The code changes every 80 s and works once.")
-                    .color(t::TEXT_MUTED)
-                    .font(t::body(14.0)),
-            );
-            ui.label(RichText::new("OR TYPE THIS ADDRESS").font(t::mono(12.0)).color(t::TEXT_MUTED));
-            ui.horizontal_wrapped(|ui| {
-                for ip in local_ipv4s() {
-                    t::copy_chip(ui, &ip);
+            hint(ui, "Scan with Lenny on your phone, or tap Find PCs there. The code works once.");
+            let labels = ["Manual".to_string(), "USB ADB".into(), "USB tether".into()];
+            if let Some(i) = t::segmented(ui, "method", &labels, self.method) {
+                self.method = if self.method == Some(i) { None } else { Some(i) };
+            }
+            match self.method {
+                Some(0) => {
+                    hint(ui, "On the phone tap Manual and type one of these, and the port:");
+                    ui.horizontal_wrapped(|ui| {
+                        for ip in local_ipv4s() {
+                            t::copy_chip(ui, &ip);
+                        }
+                        t::copy_chip(ui, &e.port().to_string());
+                    });
                 }
-                t::copy_chip(ui, &e.port().to_string());
-            });
+                Some(1) => {
+                    let status = self.adb.poll(e.port());
+                    let text = status.as_deref().unwrap_or("Looking for phones on USB…");
+                    ui.label(RichText::new(text).font(t::body(15.0)));
+                }
+                Some(_) => hint(
+                    ui,
+                    "Turn on USB tethering on the phone (Settings → Hotspot & tethering), then tap Find PCs in Lenny.",
+                ),
+                None => {}
+            }
             let known = e.known_phones();
             if !known.is_empty() {
                 ui.label(RichText::new("KNOWN PHONES").font(t::mono(12.0)).color(t::TEXT_MUTED));
@@ -753,18 +809,14 @@ impl App {
                     ("Round trip", ms(st.rtt_us)),
                     ("Received", format!("{:.0} fps", self.rates.fps)),
                 ];
-                egui::Grid::new("stats")
-                    .num_columns(2)
-                    .spacing([10.0, 10.0])
-                    .min_col_width((ui.available_width() - 10.0) / 2.0)
-                    .show(ui, |ui| {
-                        for (i, (l, v)) in tiles.iter().enumerate() {
-                            t::stat_tile(ui, l, v);
-                            if i % 2 == 1 {
-                                ui.end_row();
-                            }
+                ui.spacing_mut().item_spacing.x = 10.0;
+                for pair in tiles.chunks(2) {
+                    ui.columns(2, |c| {
+                        for (col, (l, v)) in c.iter_mut().zip(pair) {
+                            t::stat_tile(col, l, v);
                         }
                     });
+                }
             }
             // Status only; the pipeline is the same whichever backend loaded.
             let (color, text) = if vcam_real {

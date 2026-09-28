@@ -299,8 +299,10 @@ to the format the consumer picked, so the receiver app writes one frame at one s
 - LAN discovery (replaces the earlier mDNS plan): the phone broadcasts the UDP probe `LENNY?1` to port
   47474, and every Lenny Desktop answers with a `lenny://` link without host or token (protocol.md §2).
   The answer's source address is the host. Pure Dart (`app/lib/services/discovery.dart`), the same on
-  every platform, no native mDNS APIs. Limit: IPv4 broadcast reaches only the local subnet; mDNS stays
-  the upgrade if multi-subnet setups matter.
+  every platform, no native mDNS APIs. The probe goes to 255.255.255.255 and to each of the phone's own /24
+  subnet broadcasts, so a PC on the phone's USB tethering (or hotspot) network answers too. Limit: IPv4
+  broadcast reaches only the local subnet; mDNS stays the upgrade if multi-subnet setups matter.
+  The phone searches once when the app opens.
 - QR pairing: the desktop shows a `lenny://` link listing all its IPv4 addresses, the port and a
   single-use token (90 s, renewed every 80 s and after each pairing). The phone probes the listed
   addresses with the same UDP probe, connects to the first that answers, and the token skips the
@@ -328,8 +330,14 @@ backends.
   `BeginResize` on the window edges. Same winit calls on Windows.
 - **Renderer**: wgpu on DirectX 12 on Windows, OpenGL (glow) on Linux. On Windows + NVIDIA, OpenGL spent 3x the UI
   thread's CPU in the driver's buffer swap and the app felt laggy (2026-09-27).
-- **Layout**: computed from the window size every frame (fractions + clamps). Wide: preview hero + a control column
-  (31 % of the width, 340–440 px). Narrow (< 1000 px): one scrolling column.
+- **Layout**: computed from the window size every frame (fractions + clamps), aimed at no scrolling. From 1300 px:
+  preview (top-aligned) + cards in two columns (52 % of the width). 1000–1300 px: video + stream cards under the
+  preview, the rest in one side column. Narrow (< 1000 px): one scrolling column. The window opens maximized the first
+  time, then as it was left (`window.ron` in the config dir).
+- **Connection card**: QR first; Manual (IPs + port), USB ADB and USB tether folded behind one segmented control.
+  USB ADB (`adb.rs`): while that panel is open, `adb devices` every 2 s and `adb reverse tcp:PORT tcp:PORT` for each
+  authorized phone, with the user's own adb (PATH or the Android SDK; nothing bundled); the phone then connects to
+  127.0.0.1. The panel says what's missing (no adb, no phone, "allow USB debugging").
 - **Engine** (`receiver.rs`): the core receiver session; callbacks only queue (bounded, drop → keyframe request).
   Decoder thread: openh264 (built from source by the crate: no system libraries, same on MSVC, BSD licence).
   OpenH264 officially decodes Constrained Baseline, which is what Android's encoder produces by default (we don't
@@ -413,7 +421,7 @@ backends.
 - `Pressable` wrapper: pointer down animates shadow offset → 0 and translates the child by (5,5)
   with a spring (flutter_animate / `SpringSimulation`, ~250 ms). `MediaQuery.disableAnimations` → fade only.
   Every StickerButton/Card/Chip uses it, so nothing is built ad hoc per screen.
-- Background: `CustomPainter` dot grid at ~4% opacity.
+- Background: plain `page` (the dot grid was dropped 2026-09-28).
 - `QrCard`: sticker card whose inner area is a flat white box with ≥ 4-module quiet zone. The QR
   image itself gets no outline or shadow.
 

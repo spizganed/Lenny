@@ -52,7 +52,7 @@ Future<List<PcLink>> discoverPcs(int udpPort, {List<String>? targets, Duration w
       // a newer, incompatible desktop: not listed
     }
   });
-  final to = [for (final t in targets ?? const ['255.255.255.255']) InternetAddress(t)];
+  final to = [for (final t in targets ?? await _broadcasts()) InternetAddress(t)];
   for (var i = 0; i < 3; i++) {
     for (final a in to) {
       s.send(utf8.encode(_probe), a, udpPort);
@@ -61,4 +61,17 @@ Future<List<PcLink>> discoverPcs(int udpPort, {List<String>? targets, Duration w
   }
   s.close();
   return found.values.toList();
+}
+
+/// 255.255.255.255 only leaves through the default route, so also each interface's own subnet broadcast: that is
+/// how a PC on the phone's USB tethering (or hotspot) network is found.
+/// ponytail: assumes /24 (what Android tethering and home routers use); Dart doesn't expose the prefix length.
+Future<List<String>> _broadcasts() async {
+  final nets = await NetworkInterface.list(type: InternetAddressType.IPv4);
+  final own = [
+    for (final n in nets)
+      for (final a in n.addresses)
+        if (!a.isLoopback) '${a.address.substring(0, a.address.lastIndexOf('.'))}.255',
+  ];
+  return {'255.255.255.255', ...own}.toList();
 }

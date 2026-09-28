@@ -117,19 +117,16 @@ built on Windows.
 
 Open from the user's change list (checked against the code 2026-09-27; the
 Rust desktop is the target, the Flutter desktop is not worth changing):
-- Desktop connection card: IPs/port are shown by default under the QR. Wanted:
-  QR only; the other methods (manual IP, USB ADB, USB tethering) behind one
-  roll-out button, each showing only what it needs; a button to hide IPs again.
-  The Rust desktop has no USB/ADB section at all yet (§7.5 describes it).
+- Done 2026-09-28: no dotted page; QR / Find PCs first on both apps, Manual / USB ADB /
+  USB tether folded behind one segmented control each (desktop USB ADB runs `adb reverse`,
+  `desktop/src/adb.rs`); smaller preview and two card columns so a maximized desktop and a
+  landscape phone don't scroll (checked on Honor X5c Plus, 1536x816 desktop).
 - Known devices: the desktop lists known phones, but a click can't connect
   (the phone always connects to the PC, ADR-0001), so quick connect belongs on
   the phone. The phone has no known-PCs list, only the last PC prefilled.
   Wanted: a list below the connection buttons, tap = connect, at least the last PC.
-- Phone: still has a "Connect" button and shows manual IP next to Scan/Find.
-  Wanted: same roll-out flow as the desktop, only "Disconnect" while connected.
-- Preview box: the list asked for a fixed-size box that 16:9 fills fully;
-  Task 6 built the opposite (box follows the video's aspect). Ask the user
-  which one before changing it.
+- Preview box: still follows the video's aspect (Task 6); the user asked for it smaller
+  (done), not for a fixed 16:9 box.
 - Lock screen streaming: foreground service exists, never tested (testing.md
   M2 row 9). Digital zoom fallback: not needed on Android (every Camera2
   device can crop via `SCALER_CROP_REGION`); revisit for iOS.

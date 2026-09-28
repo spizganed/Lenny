@@ -9,7 +9,6 @@ use eframe::egui::{
 
 pub const INK: Color32 = Color32::from_rgb(0x07, 0x08, 0x1A);
 pub const PAGE: Color32 = Color32::from_rgb(0x1A, 0x1D, 0x38);
-pub const PAGE_DOT: Color32 = Color32::from_rgb(0x2C, 0x30, 0x60);
 pub const SURFACE: Color32 = Color32::from_rgb(0x26, 0x2A, 0x4D);
 pub const WELL: Color32 = Color32::from_rgb(0x0F, 0x11, 0x26);
 pub const TEXT: Color32 = Color32::from_rgb(0xF4, 0xF1, 0xE8);
@@ -103,21 +102,9 @@ pub fn apply_style(ctx: &egui::Context) {
     });
 }
 
-/// Dot grid behind everything (§3.7): pageDot dots on a 24 px grid.
+/// The plain page behind everything (§3.7).
 pub fn paint_page(ctx: &egui::Context) {
-    let p = ctx.layer_painter(egui::LayerId::background());
-    let r = ctx.screen_rect();
-    p.rect_filled(r, 0.0, PAGE);
-    let step = if r.width() < 700.0 { 22.0 } else { 24.0 };
-    let mut y = r.top() + step / 2.0;
-    while y < r.bottom() {
-        let mut x = r.left() + step / 2.0;
-        while x < r.right() {
-            p.circle_filled(pos2(x, y), 1.6, PAGE_DOT);
-            x += step;
-        }
-        y += step;
-    }
+    ctx.layer_painter(egui::LayerId::background()).rect_filled(ctx.screen_rect(), 0.0, PAGE);
 }
 
 /// A sticker at `rect`: fill, 3 px ink outline, hard shadow. `sink` 0..1 is how far it's pressed into its shadow.

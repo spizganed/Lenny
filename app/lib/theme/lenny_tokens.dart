@@ -6,7 +6,6 @@ abstract final class LennyTokens {
   // Neutrals
   static const ink = Color(0xFF07081A);
   static const page = Color(0xFF1A1D38);
-  static const pageDot = Color(0xFF2C3060);
   static const surface = Color(0xFF262A4D);
   static const well = Color(0xFF0F1126);
   static const text = Color(0xFFF4F1E8);
@@ -77,33 +76,3 @@ ThemeData lennyTheme() => ThemeData(
       hoverColor: Colors.transparent,
       textSelectionTheme: const TextSelectionThemeData(cursorColor: LennyTokens.yellow),
     );
-
-/// The dotted page behind every screen (design.md §3.7).
-class DotBackground extends StatelessWidget {
-  const DotBackground({super.key, required this.child, this.spacing = 24});
-  final Widget child;
-  final double spacing;
-
-  @override
-  // The boundary keeps per-second stat updates from repainting the dots.
-  Widget build(BuildContext context) => CustomPaint(painter: _Dots(spacing), child: RepaintBoundary(child: child));
-}
-
-class _Dots extends CustomPainter {
-  _Dots(this.spacing);
-  final double spacing;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    canvas.drawColor(LennyTokens.page, BlendMode.src);
-    final p = Paint()..color = LennyTokens.pageDot;
-    for (var y = spacing / 2; y < size.height; y += spacing) {
-      for (var x = spacing / 2; x < size.width; x += spacing) {
-        canvas.drawCircle(Offset(x, y), 1.6, p);
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(_Dots old) => old.spacing != spacing;
-}

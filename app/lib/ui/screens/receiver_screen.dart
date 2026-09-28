@@ -46,7 +46,8 @@ class _ReceiverScreenState extends ConsumerState<ReceiverScreen> {
     final streaming = s.link == LinkState.streaming;
 
     return Scaffold(
-      body: DotBackground(
+      body: ColoredBox(
+        color: LennyTokens.page,
         child: SafeArea(
           child: Padding(
             padding: const EdgeInsets.all(32),
