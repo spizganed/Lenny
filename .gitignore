@@ -40,3 +40,4 @@ local/
 
 # Rust
 /target/
+*.stackdump
