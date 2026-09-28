@@ -29,6 +29,7 @@ SetCompressor /SOLID lzma
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
+!insertmacro MUI_UNPAGE_FINISH ; says so when files still in use go at the next reboot
 !insertmacro MUI_LANGUAGE "English"
 
 ; A camera DLL loaded in a running Zoom/Chrome/... can't be overwritten, but it can be renamed: move it aside (deleted
@@ -108,7 +109,9 @@ Section "Lenny"
 SectionEnd
 
 Section "Uninstall"
+  ; taskkill returns before the process is gone: wait, or deleting the exe fails and the folder stays.
   nsExec::Exec 'taskkill /F /IM lenny-desktop.exe'
+  Sleep 1000
 
   ; Tolerates a partial install: every step ignores "not found".
   ExecWait '"$WINDIR\Sysnative\regsvr32.exe" /s /u "$INSTDIR\lenny_vcam_com.dll"'
@@ -116,14 +119,16 @@ Section "Uninstall"
 
   nsExec::Exec 'net stop LennyBroker'
   nsExec::Exec 'sc.exe delete LennyBroker'
+  nsExec::Exec 'taskkill /F /IM lenny-broker.exe'
+  Sleep 500
 
   nsExec::Exec 'netsh advfirewall firewall delete rule name="Lenny"'
 
   Delete "$SMPROGRAMS\Lenny.lnk"
   Delete "$DESKTOP\Lenny.lnk"
 
-  Delete "$INSTDIR\lenny-desktop.exe"
-  Delete "$INSTDIR\lenny-broker.exe"
+  Delete /REBOOTOK "$INSTDIR\lenny-desktop.exe"
+  Delete /REBOOTOK "$INSTDIR\lenny-broker.exe"
   Delete "$INSTDIR\app_icon.ico"
   ; Still loaded in a running Zoom/Chrome/...: removed on the next reboot.
   Delete /REBOOTOK "$INSTDIR\lenny_vcam_com.dll"

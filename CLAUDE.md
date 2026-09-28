@@ -109,8 +109,7 @@ Do these in order:
    `plugins/windows_receiver` once the Rust app has the Windows camera
    (ADR). (Desktop builds on Windows and the installer exist as of 2026-09-27.)
 
-Loose ends: design fonts not committed (drop OFL TTFs in
-`desktop/assets/fonts`, see `theme.rs`); openh264 rejects frames over 1 MB
+Loose ends: openh264 rejects frames over 1 MB
 (check 4K keyframes); the Android encoder doesn't request a profile (Baseline
 by default, which openh264 needs); `core/CMakeLists.txt` cargo wrapper never
 built on Windows.
@@ -133,8 +132,10 @@ Rust desktop is the target, the Flutter desktop is not worth changing):
   congestion control fixed (it cascaded to 1 Mbps in 1.5 s: now drops the whole backlog, one cut per
   second, +20%/2 s back). Lag the user saw was mostly 2.4 GHz Wi-Fi: 5 GHz / USB tether = ~30 ms.
   Tried and reverted: AE fps range [15,30] (choppy motion), hidden low-light +EV, face-priority AE.
-- Pending: both virtual cameras now register as plain "Lenny" (was "Lenny (Classic)") but that
-  needs a rebuilt installer (`installer\build.ps1`) + reinstall; not done yet. Windows still adds
+- Done 2026-09-28 (0.3.0): design fonts embedded in the desktop (`desktop/assets/fonts`, OFL, Latin subsets from
+  fontsource; egui's fonts as fallback); not streaming, the Connection card fills the side panel (big QR) and the
+  Stream card hugs its status line; uninstaller waits for the app/broker to exit. Installer rebuilt, so both vcams
+  register as plain "Lenny" (was "Lenny (Classic)"); reinstall on this PC not tested yet. Windows still adds
   " (Windows Virtual Camera)" to the MF one in some apps. Discord mirrors its own self-view: not a bug.
 - Pending: phone portrait on the Honor truncates button labels ("Scan …", "Find P…", "USB").
 - Known devices: the desktop no longer lists known phones (2026-09-28, user: not needed;

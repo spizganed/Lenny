@@ -32,40 +32,31 @@ pub const SH_PRIMARY: f32 = 5.0;
 pub const SH_BUTTON: f32 = 4.0;
 pub const SH_SMALL: f32 = 3.0;
 
-/// Loads the design fonts (DM Sans, Bricolage Grotesque, JetBrains Mono; OFL) from `assets/fonts/` next to the
-/// executable or in the source tree, when they're there; egui's built-in fonts otherwise.
-// ponytail: fonts aren't committed (the build sandbox couldn't download them); drop the TTFs into
-// desktop/assets/fonts (names below) and they're picked up, or embed them with include_bytes! when they are.
+/// The design fonts (§3.6; OFL, licences next to them in desktop/assets/fonts), embedded. egui's own fonts stay as
+/// fallbacks for symbols the Latin subsets lack (icons, arrows).
 pub fn install_fonts(ctx: &egui::Context) {
-    let dirs = [
-        std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("assets/fonts"))),
-        Some(std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/fonts"))),
-    ];
     let mut fonts = FontDefinitions::default();
-    let mut found = 0;
-    for (family, file) in [("body", "DMSans.ttf"), ("heading", "BricolageGrotesque.ttf"), ("mono", "JetBrainsMono.ttf")]
-    {
-        let bytes = dirs.iter().flatten().find_map(|d| std::fs::read(d.join(file)).ok());
-        let fam = FontFamily::Name(family.into());
-        let list = fonts.families.entry(fam.clone()).or_default();
-        if let Some(b) = bytes {
-            fonts.font_data.insert(family.into(), std::sync::Arc::new(FontData::from_owned(b)));
-            list.push(family.into());
-            found += 1;
-        }
-        // Fallbacks: egui's own fonts (and its emoji/symbol font for icons).
+    for (family, bytes) in [
+        ("body", &include_bytes!("../assets/fonts/DMSans-Regular.ttf")[..]),
+        ("bold", include_bytes!("../assets/fonts/DMSans-Bold.ttf")),
+        ("heading", include_bytes!("../assets/fonts/BricolageGrotesque-ExtraBold.ttf")),
+        ("mono", include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf")),
+    ] {
+        fonts.font_data.insert(family.into(), std::sync::Arc::new(FontData::from_static(bytes)));
         let base = if family == "mono" { FontFamily::Monospace } else { FontFamily::Proportional };
-        let fallback = fonts.families[&base].clone();
-        fonts.families.get_mut(&fam).unwrap().extend(fallback);
-    }
-    if found < 3 {
-        log::info!("design fonts: {found}/3 found in assets/fonts, using built-in fallbacks for the rest");
+        let mut list = vec![family.to_string()];
+        list.extend(fonts.families[&base].clone());
+        fonts.families.insert(FontFamily::Name(family.into()), list);
     }
     ctx.set_fonts(fonts);
 }
 
 pub fn body(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("body".into()))
+}
+/// DM Sans 700: buttons, chips, row labels.
+pub fn bold(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name("bold".into()))
 }
 pub fn heading(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("heading".into()))
@@ -91,7 +82,7 @@ pub fn apply_style(ctx: &egui::Context) {
         s.text_styles = [
             (Small, body(12.0)),
             (Body, body(15.0)),
-            (Button, body(16.0)),
+            (Button, bold(16.0)),
             (Heading, heading(24.0)),
             (Monospace, mono(14.0)),
         ]
@@ -177,7 +168,7 @@ pub fn button_h(ui: &mut Ui, label: &str, kind: Kind, enabled: bool, height: f32
     let rect = Rect::from_min_size(rect.min, size);
     let s = sink(ui, r.id, &r, enabled);
     let face = paint_sticker(ui, rect, fill, R_BUTTON, shadow, s);
-    ui.painter().text(face.center(), Align2::CENTER_CENTER, label, body(17.0), fg);
+    ui.painter().text(face.center(), Align2::CENTER_CENTER, label, bold(17.0), fg);
     if enabled {
         r.clone().on_hover_cursor(CursorIcon::PointingHand);
     }
@@ -228,7 +219,7 @@ pub fn segmented(ui: &mut Ui, id: &str, labels: &[String], selected: Option<usiz
         if i > 0 {
             ui.painter().line_segment([seg.left_top(), seg.left_bottom()], Stroke::new(BORDER, INK));
         }
-        let font = if label.len() > 10 { body(13.0) } else { body(15.0) };
+        let font = if label.len() > 10 { bold(13.0) } else { bold(15.0) };
         ui.painter().text(seg.center(), Align2::CENTER_CENTER, label, font, if on { INK } else { TEXT });
         if r.clicked() {
             tapped = Some(i);
@@ -246,7 +237,7 @@ pub fn toggle(ui: &mut Ui, label: &str, on: bool) -> bool {
     let s = sink(ui, r.id, &r, true);
     let face = paint_sticker(ui, rect, if on { MINT } else { WELL }, R_BUTTON, SH_BUTTON, s);
     let text = if on { format!("✔  {label}") } else { label.to_string() };
-    ui.painter().text(face.center(), Align2::CENTER_CENTER, text, body(16.0), if on { INK } else { TEXT });
+    ui.painter().text(face.center(), Align2::CENTER_CENTER, text, bold(16.0), if on { INK } else { TEXT });
     r.on_hover_cursor(CursorIcon::PointingHand).clicked()
 }
 
@@ -265,7 +256,7 @@ pub fn switch(ui: &mut Ui, id: &str, on: bool) -> bool {
 /// Status chip (§4): pill, dot in the status colour, bold label.
 /// No dot (`color` None): a plain info pill in the same style, e.g. the phone's name and battery.
 pub fn status_chip(ui: &mut Ui, color: Option<Color32>, label: &str, fill: Color32) {
-    let galley = ui.painter().layout_no_wrap(label.to_string(), body(15.0), TEXT);
+    let galley = ui.painter().layout_no_wrap(label.to_string(), bold(15.0), TEXT);
     let text_x = if color.is_some() { 40.0 } else { 18.0 };
     let size = vec2(galley.size().x + text_x + 18.0, 42.0);
     let (outer, _) = ui.allocate_exact_size(size + Vec2::splat(SH_SMALL), Sense::hover());

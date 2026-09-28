@@ -38,6 +38,8 @@ pub struct App {
     stream_h: f32,
     /// How much taller the stream card came out than asked (portrait), taken off the next request.
     stream_extra: f32,
+    /// Connection card height minus its QR code, last frame: what the QR leaves room for when it fills the panel.
+    conn_rest: f32,
     screenshot: Option<(std::path::PathBuf, Instant, Duration, bool)>,
 }
 
@@ -79,6 +81,7 @@ impl App {
             rates: Rates::default(),
             stream_h: 300.0,
             stream_extra: 0.0,
+            conn_rest: 300.0,
             screenshot: screenshot.map(|(p, d)| (p, Instant::now(), d, false)),
         }
     }
@@ -111,7 +114,13 @@ impl eframe::App for App {
                 .show_separator_line(false)
                 .frame(egui::Frame::NONE.inner_margin(Margin { left: 0, right: side_margin, top: 4, bottom: 16 }))
                 .show(ctx, |ui| {
-                    if two {
+                    let streaming =
+                        self.engine.as_ref().is_ok_and(|e| e.session.state() == LENNY_STATE_STREAMING as i32);
+                    if two && !streaming {
+                        // Only the connection card: it takes the whole panel, so the QR code can be big.
+                        let h = ui.available_height(); // outside the scroll area: inside it is unbounded
+                        egui::ScrollArea::vertical().show(ui, |ui| self.connection_card(ui, h));
+                    } else if two {
                         ui.spacing_mut().item_spacing.x = 20.0;
                         ui.columns(2, |c| {
                             egui::ScrollArea::vertical().id_salt("a").show(&mut c[0], |ui| self.cards_left(ui));
@@ -188,8 +197,9 @@ fn title_bar(ctx: &egui::Context, engine: Option<&Engine>) {
             }
             ui.horizontal_centered(|ui| {
                 // Wordmark with its 3 px hard ink text shadow.
-                let (r, _) = ui.allocate_exact_size(vec2(96.0, 46.0), Sense::hover());
                 let font = t::heading(38.0);
+                let w = ui.painter().layout_no_wrap("Lenny".into(), font.clone(), t::TEXT).size().x;
+                let (r, _) = ui.allocate_exact_size(vec2(w + 6.0, 46.0), Sense::hover());
                 ui.painter().text(r.left_center() + vec2(3.0, 3.0), Align2::LEFT_CENTER, "Lenny", font.clone(), t::INK);
                 ui.painter().text(r.left_center(), Align2::LEFT_CENTER, "Lenny", font, t::TEXT);
                 let os = if cfg!(windows) { "WINDOWS" } else { "LINUX" };
@@ -591,7 +601,7 @@ impl App {
         };
         // Streaming: the phone and Disconnect sit in the title bar, so the connection card goes away.
         if e.session.state() != LENNY_STATE_STREAMING as i32 {
-            self.connection_card(ui);
+            self.connection_card(ui, 0.0);
             ui.add_space(GAP);
         } else {
             self.camera_card(ui);
@@ -613,8 +623,11 @@ impl App {
         }
     }
 
-    fn connection_card(&mut self, ui: &mut Ui) {
+    /// `fill_h` > 0: the card is that tall and the QR code grows into the room the rest leaves.
+    fn connection_card(&mut self, ui: &mut Ui, fill_h: f32) {
         let Ok(e) = &self.engine else { return };
+        let top = ui.cursor().top();
+        let mut qr_side = 0.0;
         t::card(ui, "Connection", |ui| {
             // Not connected: the QR code (single-use token) is the way in; the phone can also find this PC by itself.
             // Manual, USB ADB and USB tether stay folded until picked (a second tap folds them again).
@@ -624,11 +637,13 @@ impl App {
             }
             if let Some((_, tex)) = &self.qr {
                 // The QR sits in a flat white box with a quiet zone; no outline or shadow on the code itself.
-                let side = ui.available_width().min(240.0);
+                let room = if fill_h > 0.0 { fill_h - self.conn_rest } else { 240.0 };
+                let side = ui.available_width().min(room).max(160.0);
+                qr_side = side;
                 let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), side), Sense::hover());
                 let box_ = Rect::from_center_size(r.center(), Vec2::splat(side));
                 ui.painter().rect_filled(box_, CornerRadius::same(t::R_TILE), Color32::from_rgb(0xFA, 0xFA, 0xF7));
-                egui::Image::new(tex).paint_at(ui, box_.shrink(side * 0.08));
+                egui::Image::new(tex).paint_at(ui, box_); // the texture has its own quiet zone
             }
             hint(ui, "Scan with Lenny on your phone, or tap Find PCs there. The code works once.");
             let labels = ["Manual".to_string(), "USB ADB".into(), "USB tether".into()];
@@ -655,6 +670,11 @@ impl App {
                 None => {}
             }
         });
+        let rest = ui.cursor().top() - top - qr_side;
+        if (rest - self.conn_rest).abs() > 0.5 {
+            self.conn_rest = rest;
+            ui.ctx().request_repaint();
+        }
     }
 
     fn camera_card(&mut self, ui: &mut Ui) {
@@ -673,7 +693,7 @@ impl App {
             let lens = caps.lenses.get(cs.lens_id as usize);
             if let Some(l) = lens.filter(|l| l.zoom_max > 100 && peer.controls & LENNY_CAP_ZOOM != 0) {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Zoom").font(t::body(16.0)).strong());
+                    ui.label(RichText::new("Zoom").font(t::bold(16.0)));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.label(
                             RichText::new(format!("{:.1}×", cs.zoom as f32 / 100.0))
@@ -703,7 +723,7 @@ impl App {
             }
             if peer.controls & LENNY_CAP_TORCH != 0 {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("🔦  Torch").font(t::body(16.0)).strong());
+                    ui.label(RichText::new("🔦  Torch").font(t::bold(16.0)));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if t::switch(ui, "torch", cs.torch != 0) {
                             e.control(lenny_control_cmd::LENNY_CTL_TORCH, 0, 0, (cs.torch == 0) as i32);
@@ -724,7 +744,7 @@ impl App {
         t::card(ui, "Focus & exposure", |ui| {
             // Focus: the camera's continuous autofocus, or Manual (tap the preview; the focus holds there).
             if peer.controls & LENNY_CAP_FOCUS != 0 {
-                ui.label(RichText::new("Focus").font(t::body(16.0)).strong());
+                ui.label(RichText::new("Focus").font(t::bold(16.0)));
                 let labels = ["Auto".to_string(), "Manual".to_string()];
                 match t::segmented(ui, "focus", &labels, Some(manual as usize)) {
                     Some(0) => {
@@ -748,7 +768,7 @@ impl App {
             // Exposure: the camera's own auto exposure at 0, the user's bias or lock otherwise. Nothing of ours on top.
             if peer.controls & LENNY_CAP_EXPOSURE_COMP != 0 && peer.exposure_max > peer.exposure_min {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Exposure").font(t::body(16.0)).strong());
+                    ui.label(RichText::new("Exposure").font(t::bold(16.0)));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let ev = cs.exposure_comp as f32 / 1000.0;
                         let lock = if cs.exposure_lock != 0 { "Locked · " } else { "" };
@@ -810,7 +830,7 @@ impl App {
         };
         t::card(ui, "Video", |ui| {
             let row = |ui: &mut Ui, label: &str, id: &str, items: Vec<String>, sel: Option<usize>| -> Option<usize> {
-                ui.label(RichText::new(label).font(t::body(14.0)).strong());
+                ui.label(RichText::new(label).font(t::bold(14.0)));
                 t::segmented(ui, id, &items, sel)
             };
             if aspects.len() > 1 {
@@ -840,39 +860,48 @@ impl App {
         let streaming = e.session.state() == LENNY_STATE_STREAMING as i32;
         let st = e.session.stats();
         let (vcam_real, _) = e.vcam_status();
-        t::card(ui, "Stream", |ui| {
-            ui.set_min_height(height - 2.0 * (18.0 + t::BORDER));
-            if streaming {
-                let res = self.video.as_ref().map_or("—".into(), |v| format!("{}×{}", v.source.0, v.source.1));
-                let ms = |us: i64| if us < 0 { "—".to_string() } else { format!("{:.0} ms", us as f64 / 1000.0) };
-                let tiles = [
-                    ("Resolution", res),
-                    ("Frame rate", format!("{:.0} fps", self.rates.shown_fps)),
-                    ("Bitrate", format!("{:.1} Mbps", self.rates.kbps / 1000.0)),
-                    ("Latency", ms(st.latency_us)),
-                    ("Round trip", ms(st.rtt_us)),
-                    ("Received", format!("{:.0} fps", self.rates.fps)),
-                ];
-                ui.spacing_mut().item_spacing.x = 10.0;
-                for pair in tiles.chunks(cols) {
-                    ui.columns(cols, |c| {
-                        for (col, (l, v)) in c.iter_mut().zip(pair) {
-                            t::stat_tile(col, l, v);
-                        }
-                    });
+        // Status only; the pipeline is the same whichever backend loaded.
+        let (color, text) = if vcam_real {
+            (t::GREEN, "Virtual camera: active")
+        } else {
+            (t::LILAC, "Virtual camera: unavailable in this environment")
+        };
+        // Just the status line when not streaming: the card hugs it.
+        let w = if streaming {
+            ui.available_width()
+        } else {
+            let text_w = ui.painter().layout_no_wrap(text.into(), t::bold(15.0), t::TEXT).size().x;
+            (text_w + 18.0 + 12.0 + 2.0 * (18.0 + t::BORDER) + t::SH_CARD + 4.0).min(ui.available_width())
+        };
+        ui.allocate_ui(vec2(w, 0.0), |ui| {
+            t::card(ui, "Stream", |ui| {
+                ui.set_min_height(height - 2.0 * (18.0 + t::BORDER));
+                if streaming {
+                    let res = self.video.as_ref().map_or("—".into(), |v| format!("{}×{}", v.source.0, v.source.1));
+                    let ms = |us: i64| if us < 0 { "—".to_string() } else { format!("{:.0} ms", us as f64 / 1000.0) };
+                    let tiles = [
+                        ("Resolution", res),
+                        ("Frame rate", format!("{:.0} fps", self.rates.shown_fps)),
+                        ("Bitrate", format!("{:.1} Mbps", self.rates.kbps / 1000.0)),
+                        ("Latency", ms(st.latency_us)),
+                        ("Round trip", ms(st.rtt_us)),
+                        ("Received", format!("{:.0} fps", self.rates.fps)),
+                    ];
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    for pair in tiles.chunks(cols) {
+                        ui.columns(cols, |c| {
+                            for (col, (l, v)) in c.iter_mut().zip(pair) {
+                                t::stat_tile(col, l, v);
+                            }
+                        });
+                    }
                 }
-            }
-            // Status only; the pipeline is the same whichever backend loaded.
-            let (color, text) = if vcam_real {
-                (t::GREEN, "Virtual camera: active")
-            } else {
-                (t::LILAC, "Virtual camera: unavailable in this environment")
-            };
-            ui.horizontal(|ui| {
-                let (r, _) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::hover());
-                ui.painter().circle(r.center(), 6.0, color, Stroke::new(t::BORDER, t::INK));
-                ui.label(RichText::new(text).font(t::body(15.0)).strong());
-            });
+                ui.horizontal(|ui| {
+                    let (r, _) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::hover());
+                    ui.painter().circle(r.center(), 6.0, color, Stroke::new(t::BORDER, t::INK));
+                    ui.label(RichText::new(text).font(t::bold(15.0)));
+                });
+            })
         });
     }
 
