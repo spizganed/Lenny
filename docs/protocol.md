@@ -232,9 +232,10 @@ CONTROL_STATE: full current state, sent after STREAM_START, after every change, 
 60 s so the battery level stays current.
 
 **Default state is Auto.** Every connect and every reconnect starts with continuous AF, AE on, AWB auto, EV 0, torch
-off, zoom 1×, pan centred, whichever side set them before. The UIs show two modes: **Auto** (nothing manual) and
-**Manual** (tap-to-focus, which holds, plus exposure compensation and exposure lock); going back to Auto sends
-`reset_auto`. A settings change mid-stream (CAPS_SELECT) keeps the current controls.
+off, zoom 1×, pan centred, whichever side set them before. The UIs show focus as **Auto** (continuous AF) or **Manual**
+(tap-to-focus, which holds; back to Auto sends `focus_auto`), and exposure compensation and exposure lock always, with
+EV 0 meaning the camera's own auto exposure (2026-09-28; before, one Auto | Manual switch covered both and sent
+`reset_auto`). A settings change mid-stream (CAPS_SELECT) keeps the current controls.
 
 ### 6.10 STATS (0x0050)
 Optional, every 1 s. Tag 1 `encoded_fps_x100` u32, 2 `bitrate_kbps` u32, 3 `dropped_frames` u32,
@@ -268,9 +269,10 @@ One streaming sender per receiver in 1.0. A second sender gets `GOODBYE(BUSY)`.
 
 ## 9. Backpressure (sender)
 The sender queues outgoing video and writes it from its own thread, so a slow network never blocks the encoder.
-When the frames waiting in that queue span more than 250 ms of capture time, the sender drops the backlog (keeping only
-the newest queued keyframe), drops new frames until the next keyframe, requests one from its encoder, and lowers the
-bitrate one step (−20%, min 1 Mbps; +10% back per 5 s without congestion, up to the negotiated rate). The kernel send
+When the frames waiting in that queue span more than 250 ms of capture time, the sender drops the whole backlog,
+drops new frames until the next keyframe, requests one from its encoder, and lowers the bitrate one step (−20%, min
+1 Mbps, at most one step per second so a single burst doesn't cascade; +20% back per 2 s without congestion, up to the
+negotiated rate). The kernel send
 buffer is capped at 128 KiB so the backlog stays visible to this check. Old video is never queued, because freshness
 matters more than completeness.
 

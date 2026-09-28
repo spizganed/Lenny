@@ -1,5 +1,5 @@
 //! Lenny's Windows virtual cameras, one COM DLL with two classes (architecture.md §7.4):
-//! - "Lenny" / "Lenny (Classic)": a DirectShow video capture source filter (`filter`). Zoom, Teams, Chrome, OBS
+//! - "Lenny": a DirectShow video capture source filter (`filter`). Zoom, Teams, Chrome, OBS
 //!   and every other DirectShow consumer load this DLL into their own process and pull frames from it.
 //! - "Lenny" on Windows 11: the Media Foundation virtual camera source (`mf`), run by Frame Server.
 //!

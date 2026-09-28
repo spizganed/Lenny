@@ -34,6 +34,10 @@ pub struct App {
     pan_sent: Instant,
     wheel_zoom: Option<(u16, Instant)>,
     rates: Rates,
+    /// Last drawn height of the stream card under a landscape preview, so the preview can leave room for it.
+    stream_h: f32,
+    /// How much taller the stream card came out than asked (portrait), taken off the next request.
+    stream_extra: f32,
     screenshot: Option<(std::path::PathBuf, Instant, Duration, bool)>,
 }
 
@@ -73,6 +77,8 @@ impl App {
             pan_sent: Instant::now(),
             wheel_zoom: None,
             rates: Rates::default(),
+            stream_h: 300.0,
+            stream_extra: 0.0,
             screenshot: screenshot.map(|(p, d)| (p, Instant::now(), d, false)),
         }
     }
@@ -109,7 +115,7 @@ impl eframe::App for App {
                         ui.spacing_mut().item_spacing.x = 20.0;
                         ui.columns(2, |c| {
                             egui::ScrollArea::vertical().id_salt("a").show(&mut c[0], |ui| self.cards_left(ui));
-                            egui::ScrollArea::vertical().id_salt("b").show(&mut c[1], |ui| self.cards_right(ui));
+                            egui::ScrollArea::vertical().id_salt("b").show(&mut c[1], |ui| self.cards_right(ui, false));
                         });
                     } else {
                         egui::ScrollArea::vertical().show(ui, |ui| self.cards_left(ui));
@@ -119,8 +125,7 @@ impl eframe::App for App {
                 .frame(egui::Frame::NONE.inner_margin(Margin { left: side_margin, right: 16, top: 4, bottom: 24 }))
                 .show(ctx, |ui| {
                     if two {
-                        let size = ui.available_size();
-                        self.preview(ui, size);
+                        self.hero(ui);
                     } else {
                         // Narrower: the picture takes at most 45 % of the height, video + stream fill the space below it.
                         let h = ui.available_height() * 0.45; // outside the scroll area: inside it is unbounded
@@ -128,7 +133,7 @@ impl eframe::App for App {
                             let size = vec2(ui.available_width(), h);
                             self.preview(ui, size);
                             ui.add_space(GAP);
-                            self.cards_right(ui);
+                            self.cards_right(ui, true);
                         });
                     }
                 });
@@ -144,13 +149,14 @@ impl eframe::App for App {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         let width = ui.available_width();
                         // As tall as the picture needs at this width (its real aspect ratio), within 45 % of the window.
-                        let aspect = self.video.as_ref().map_or(16.0 / 9.0, |v| v.size.0 as f32 / v.size.1 as f32);
+                        let aspect = self.aspect(ctx);
                         let pad = 2.0 * (16.0 + t::BORDER) + t::SH_HERO;
-                        let h = ((width - pad) / aspect + pad).min(ctx.screen_rect().height() * 0.45).max(200.0);
+                        let h =
+                            ((width - pad) / landscape(aspect) + pad).min(ctx.screen_rect().height() * 0.45).max(200.0);
                         self.preview(ui, vec2(width, h));
                         ui.add_space(GAP);
                         self.cards_left(ui);
-                        self.cards_right(ui);
+                        self.cards_right(ui, true);
                     });
                 });
         }
@@ -191,9 +197,12 @@ fn title_bar(ctx: &egui::Context, engine: Option<&Engine>) {
                 t::badge(ui, r.left_center() - vec2(0.0, 16.0), false, os, t::LILAC, false);
                 if let Some(e) = engine {
                     let (color, label) = status(e);
-                    t::status_chip(ui, color, label, t::SURFACE);
+                    t::status_chip(ui, Some(color), label, t::SURFACE);
+                    if e.session.state() == LENNY_STATE_STREAMING as i32 {
+                        phone(ui, e);
+                    }
                 } else {
-                    t::status_chip(ui, t::CORAL, "Can't start", t::SURFACE);
+                    t::status_chip(ui, Some(t::CORAL), "Can't start", t::SURFACE);
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if t::icon_button(ui, "🗙", "Close", t::SURFACE, 44.0).clicked() {
@@ -234,6 +243,36 @@ fn resize_edges(ctx: &egui::Context) {
     ctx.set_cursor_icon(cursor);
     if ctx.input(|i| i.pointer.primary_pressed()) {
         ctx.send_viewport_cmd(ViewportCommand::BeginResize(dir));
+    }
+}
+
+/// Streaming: the phone's name and battery, then Disconnect.
+fn phone(ui: &mut Ui, e: &Engine) {
+    let (_, peer) = e.session.peer();
+    let (_, cs) = e.session.control_state();
+    let mut label = c_chars(&peer.name);
+    if cs.battery <= 100 {
+        label += &format!(" · {}%{}", cs.battery, if cs.charging != 0 { " ⚡" } else { "" });
+    }
+    t::status_chip(ui, None, &label, t::SURFACE);
+    ui.add_space(8.0);
+    let clicked = ui
+        .allocate_ui(vec2(150.0, 49.0), |ui| t::button_h(ui, "Disconnect", Kind::Destructive, true, 44.0).clicked())
+        .inner;
+    if clicked {
+        // GOODBYE(USER): the phone stops retrying. Listening restarts for the next phone.
+        e.session.disconnect();
+        let s = e.session.clone();
+        std::thread::spawn(move || {
+            // start() refuses until the old I/O thread has finished closing.
+            for _ in 0..60 {
+                std::thread::sleep(Duration::from_millis(50));
+                if s.start() == LENNY_OK {
+                    return;
+                }
+            }
+            log::error!("couldn't start listening again after disconnect");
+        });
     }
 }
 
@@ -331,27 +370,82 @@ fn save_png(path: &std::path::Path, img: &ColorImage) -> std::io::Result<()> {
 // ---- preview (Task 6: the box is the video's real aspect ratio) -----------------------------------------------
 
 impl App {
+    /// The preview's aspect ratio (from the decoded frames, 16:9 until one arrives), eased over 0.25 s when the phone
+    /// turns, so the box changes shape instead of jumping.
+    fn aspect(&self, ctx: &egui::Context) -> f32 {
+        let target = self.video.as_ref().map_or(16.0 / 9.0, |v| v.size.0 as f32 / v.size.1 as f32);
+        ctx.animate_value_with_time(Id::new("preview-aspect"), target, 0.25)
+    }
+
+    /// Wide windows: the preview with the stream card under it (landscape, same width) or beside it (portrait, same
+    /// height; the preview then runs to the bottom of the window).
+    fn hero(&mut self, ui: &mut Ui) {
+        let area = ui.available_rect_before_wrap();
+        let gap = 16.0 + t::SH_HERO;
+        let portrait = self.aspect(ui.ctx()) < 1.0;
+        if portrait {
+            // The stream card keeps at least 250 px; one column of tiles when it's that narrow.
+            let room = Rect::from_min_size(area.min, vec2(area.width() - 250.0 - gap, area.height()));
+            let card = self.preview_in(ui, room, false);
+            let r = Rect::from_min_max(pos2(card.right() + gap, area.top()), area.max);
+            let r = r.intersect(Rect::from_min_size(r.min, vec2(440.0, card.height() + t::SH_CARD)));
+            let cols = if r.width() >= 360.0 { 2 } else { 1 };
+            let want = card.height() - self.stream_extra;
+            let used = ui.scope_builder(egui::UiBuilder::new().max_rect(r), |ui| self.stream_card(ui, cols, want));
+            // What the card adds around its content, measured, so its bottom lines up with the preview's.
+            // Clamped: content taller than the preview must not make it grow every frame.
+            self.stream_extra = (used.response.rect.height() - t::SH_CARD - want).clamp(0.0, 60.0);
+        } else {
+            let room = Rect::from_min_size(area.min, vec2(area.width(), area.height() - self.stream_h - 16.0));
+            let card = self.preview_in(ui, room, false);
+            let r = Rect::from_min_max(
+                pos2(area.left(), card.bottom() + gap),
+                pos2(card.right() + t::SH_CARD, area.bottom()),
+            );
+            let used = ui.scope_builder(egui::UiBuilder::new().max_rect(r), |ui| self.stream_card(ui, 3, 0.0));
+            self.stream_h = used.response.rect.height();
+        }
+    }
+
     fn preview(&mut self, ui: &mut Ui, avail: Vec2) {
         let (area, _) = ui.allocate_exact_size(avail, Sense::hover());
+        self.preview_in(ui, area, true);
+    }
+
+    /// The preview card inside `area`, top-left aligned; returns the card (without its shadow). `landscape_height`:
+    /// a portrait picture keeps the height the same mode has in landscape, so the cards under it don't move.
+    fn preview_in(&mut self, ui: &mut Ui, area: Rect, landscape_height: bool) -> Rect {
         const PAD: f32 = 16.0 + t::BORDER;
         // The picture's real aspect ratio, from the decoded frames (not what was requested). 16:9 until one arrives.
-        let aspect = self.video.as_ref().map_or(16.0 / 9.0, |v| v.size.0 as f32 / v.size.1 as f32);
-        let max = (area.size() - Vec2::splat(2.0 * PAD + t::SH_HERO)).max(Vec2::splat(40.0));
+        let aspect = self.aspect(ui.ctx());
+        let mut max = (area.size() - Vec2::splat(2.0 * PAD + t::SH_HERO)).max(Vec2::splat(40.0));
+        if landscape_height {
+            max.y = max.y.min(max.x / landscape(aspect));
+        }
         let inner = if max.x / max.y > aspect { vec2(max.y * aspect, max.y) } else { vec2(max.x, max.x / aspect) };
-        let size = inner + Vec2::splat(2.0 * PAD);
-        let card = Rect::from_min_size(pos2(area.center().x - (size.x + t::SH_HERO) / 2.0, area.top()), size);
+        let card = Rect::from_min_size(area.left_top(), inner + Vec2::splat(2.0 * PAD));
         t::paint_sticker(ui, card, t::WELL, t::R_CARD, t::SH_HERO, 0.0);
         let pic = card.shrink(PAD);
         let Ok(e) = &self.engine else {
             let msg = self.engine.as_ref().err().cloned().unwrap_or_default();
             empty_state(ui, pic, "Can't start", &msg);
-            return;
+            return card;
         };
         let streaming = e.session.state() == LENNY_STATE_STREAMING as i32;
         let fresh = e.last_frame_at().is_some_and(|t| t.elapsed() < Duration::from_secs(1));
         match (&self.video, streaming) {
             (Some(v), true) => {
-                egui::Image::new(&v.tex).corner_radius(CornerRadius::same(t::R_TILE)).paint_at(ui, pic);
+                // While the box eases to a new shape the picture keeps its own aspect, centred on the well.
+                let real = v.size.0 as f32 / v.size.1 as f32;
+                let fit = if pic.aspect_ratio() > real {
+                    vec2(pic.height() * real, pic.height())
+                } else {
+                    vec2(pic.width(), pic.width() / real)
+                };
+                ui.painter().rect_filled(pic, CornerRadius::same(t::R_TILE), t::INK);
+                egui::Image::new(&v.tex)
+                    .corner_radius(CornerRadius::same(t::R_TILE))
+                    .paint_at(ui, Rect::from_center_size(pic.center(), fit));
                 ui.painter().rect_stroke(
                     pic,
                     CornerRadius::same(t::R_TILE),
@@ -374,7 +468,6 @@ impl App {
         }
         if streaming {
             let inset = 18.0;
-            t::badge(ui, pic.left_top() + Vec2::splat(inset), false, "LIVE", t::GREEN, true);
             let (_, cs) = e.session.control_state();
             let caps = e.session.peer_caps();
             let lens = caps
@@ -398,6 +491,7 @@ impl App {
                 self.preview_input(ui, pic);
             }
         }
+        card
     }
 
     /// Manual mode: tap = focus there. Zoomed in: drag = pan the sensor crop (protocol.md §6.9), wheel = zoom.
@@ -410,7 +504,7 @@ impl App {
         let base = lens.map_or(100, |l| if l.zoom_base == 0 { 100 } else { l.zoom_base }) as f32 / 100.0;
         let z = base * cs.zoom.max(1) as f32 / 100.0; // zoom on the camera's field of view
         let can_pan = peer.controls & LENNY_CAP_PAN != 0 && z > 1.01;
-        let manual = self.manual || !is_auto(&cs);
+        let manual = self.manual || cs.af_mode != 0;
         let r = ui.interact(pic, Id::new("preview"), Sense::click_and_drag());
         if manual && peer.controls & LENNY_CAP_FOCUS != 0 {
             r.clone().on_hover_cursor(CursorIcon::Crosshair);
@@ -462,6 +556,11 @@ impl App {
     }
 }
 
+/// The aspect ratio of the same picture held in landscape.
+fn landscape(aspect: f32) -> f32 {
+    aspect.max(1.0 / aspect)
+}
+
 fn norm(f: f32) -> u16 {
     (f.clamp(0.0, 1.0) * 65535.0) as u16
 }
@@ -479,10 +578,6 @@ fn empty_state(ui: &Ui, r: Rect, title: &str, sub: &str) {
     }
 }
 
-fn is_auto(cs: &lenny_control_state) -> bool {
-    cs.af_mode == 0 && cs.exposure_comp == 0 && cs.exposure_lock == 0 && cs.wb_lock == 0
-}
-
 // ---- cards --------------------------------------------------------------------------------------------------
 
 impl App {
@@ -494,10 +589,11 @@ impl App {
             });
             return;
         };
-        let streaming = e.session.state() == LENNY_STATE_STREAMING as i32;
-        self.connection_card(ui);
-        ui.add_space(GAP);
-        if streaming {
+        // Streaming: the phone and Disconnect sit in the title bar, so the connection card goes away.
+        if e.session.state() != LENNY_STATE_STREAMING as i32 {
+            self.connection_card(ui);
+            ui.add_space(GAP);
+        } else {
             self.camera_card(ui);
             ui.add_space(GAP);
             self.mode_card(ui);
@@ -506,52 +602,20 @@ impl App {
     }
 
     /// (Streaming) video modes, then stream stats and the virtual camera.
-    fn cards_right(&mut self, ui: &mut Ui) {
+    fn cards_right(&mut self, ui: &mut Ui, with_stream: bool) {
         let Ok(e) = &self.engine else { return };
         if e.session.state() == LENNY_STATE_STREAMING as i32 {
             self.video_card(ui);
             ui.add_space(GAP);
         }
-        self.stream_card(ui);
+        if with_stream {
+            self.stream_card(ui, 2, 0.0);
+        }
     }
 
     fn connection_card(&mut self, ui: &mut Ui) {
         let Ok(e) = &self.engine else { return };
-        let streaming = e.session.state() == LENNY_STATE_STREAMING as i32;
         t::card(ui, "Connection", |ui| {
-            if streaming {
-                let (_, peer) = e.session.peer();
-                let (_, cs) = e.session.control_state();
-                // Phone | Disconnect on one row: the card stays short, so the column fits without scrolling.
-                let disconnect = ui.columns(2, |c| {
-                    c[0].label(RichText::new(format!("📱 {}", c_chars(&peer.name))).font(t::heading(20.0)));
-                    if cs.battery <= 100 {
-                        let charging = if cs.charging != 0 { " ⚡" } else { "" };
-                        c[0].label(
-                            RichText::new(format!("battery {}%{charging}", cs.battery))
-                                .font(t::mono(14.0))
-                                .color(t::TEXT_MUTED),
-                        );
-                    }
-                    t::button(&mut c[1], "Disconnect", Kind::Destructive, true).clicked()
-                });
-                if disconnect {
-                    // GOODBYE(USER): the phone stops retrying. Listening restarts for the next phone.
-                    e.session.disconnect();
-                    let s = e.session.clone();
-                    std::thread::spawn(move || {
-                        // start() refuses until the old I/O thread has finished closing.
-                        for _ in 0..60 {
-                            std::thread::sleep(Duration::from_millis(50));
-                            if s.start() == LENNY_OK {
-                                return;
-                            }
-                        }
-                        log::error!("couldn't start listening again after disconnect");
-                    });
-                }
-                return;
-            }
             // Not connected: the QR code (single-use token) is the way in; the phone can also find this PC by itself.
             // Manual, USB ADB and USB tether stay folded until picked (a second tap folds them again).
             let uri = e.pair_uri();
@@ -574,42 +638,21 @@ impl App {
             match self.method {
                 Some(0) => {
                     hint(ui, "On the phone tap Manual and type one of these, and the port:");
-                    ui.horizontal_wrapped(|ui| {
-                        for ip in local_ipv4s() {
-                            t::copy_chip(ui, &ip);
-                        }
-                        t::copy_chip(ui, &e.port().to_string());
-                    });
+                    addresses(ui, &local_ipv4s().0, e.port(), "No Wi-Fi or network connection.");
                 }
                 Some(1) => {
                     let status = self.adb.poll(e.port());
                     let text = status.as_deref().unwrap_or("Looking for phones on USB…");
                     ui.label(RichText::new(text).font(t::body(15.0)));
                 }
-                Some(_) => hint(
-                    ui,
-                    "Turn on USB tethering on the phone (Settings → Hotspot & tethering), then tap Find PCs in Lenny.",
-                ),
-                None => {}
-            }
-            let known = e.known_phones();
-            if !known.is_empty() {
-                ui.label(RichText::new("KNOWN PHONES").font(t::mono(12.0)).color(t::TEXT_MUTED));
-                ui.label(
-                    RichText::new("They reconnect by themselves, no prompt.").color(t::TEXT_MUTED).font(t::body(13.0)),
-                );
-                for (id, name) in known {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(format!("📱  {name}")).font(t::body(15.0)));
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if t::icon_button(ui, "🗑", "Forget (asks again next time Lenny starts)", t::SURFACE, 36.0)
-                                .clicked()
-                            {
-                                e.forget(&id);
-                            }
-                        });
-                    });
+                Some(_) => {
+                    hint(
+                        ui,
+                        "Turn on USB tethering on the phone (Settings → Hotspot & tethering), then tap Find PCs in Lenny.",
+                    );
+                    addresses(ui, &local_ipv4s().1, e.port(), "No USB tethering yet.");
                 }
+                None => {}
             }
         });
     }
@@ -676,34 +719,33 @@ impl App {
         let Ok(e) = &self.engine else { return };
         let (_, peer) = e.session.peer();
         let (_, cs) = e.session.control_state();
-        let manual = self.manual || !is_auto(&cs);
+        let manual = self.manual || cs.af_mode != 0;
         let mut go_manual = None;
         t::card(ui, "Focus & exposure", |ui| {
-            let labels = ["Auto".to_string(), "Manual".to_string()];
-            match t::segmented(ui, "mode", &labels, Some(manual as usize)) {
-                Some(0) => {
-                    go_manual = Some(false);
-                    if !is_auto(&cs) {
-                        e.control(lenny_control_cmd::LENNY_CTL_RESET_AUTO, 0, 0, 0);
-                    }
-                }
-                Some(_) => go_manual = Some(true),
-                None => {}
-            }
-            if !manual {
-                ui.label(
-                    RichText::new("Continuous autofocus and auto exposure.").color(t::TEXT_MUTED).font(t::body(14.0)),
-                );
-                return;
-            }
+            // Focus: the camera's continuous autofocus, or Manual (tap the preview; the focus holds there).
             if peer.controls & LENNY_CAP_FOCUS != 0 {
-                let text = if cs.af_mode != 0 {
-                    "Focus held. Tap the preview to focus somewhere else."
-                } else {
-                    "Tap the preview to focus there."
-                };
-                ui.label(RichText::new(text).color(t::TEXT_MUTED).font(t::body(14.0)));
+                ui.label(RichText::new("Focus").font(t::body(16.0)).strong());
+                let labels = ["Auto".to_string(), "Manual".to_string()];
+                match t::segmented(ui, "focus", &labels, Some(manual as usize)) {
+                    Some(0) => {
+                        go_manual = Some(false);
+                        if cs.af_mode != 0 {
+                            e.control(lenny_control_cmd::LENNY_CTL_FOCUS_AUTO, 0, 0, 0);
+                        }
+                    }
+                    Some(_) => go_manual = Some(true),
+                    None => {}
+                }
+                if manual {
+                    let text = if cs.af_mode != 0 {
+                        "Focus held. Tap the preview to focus somewhere else."
+                    } else {
+                        "Tap the preview to focus there."
+                    };
+                    ui.label(RichText::new(text).color(t::TEXT_MUTED).font(t::body(14.0)));
+                }
             }
+            // Exposure: the camera's own auto exposure at 0, the user's bias or lock otherwise. Nothing of ours on top.
             if peer.controls & LENNY_CAP_EXPOSURE_COMP != 0 && peer.exposure_max > peer.exposure_min {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Exposure").font(t::body(16.0)).strong());
@@ -792,12 +834,14 @@ impl App {
         }
     }
 
-    fn stream_card(&mut self, ui: &mut Ui) {
+    /// Stat tiles in `cols` columns; `height` (0 = as needed) stretches the card to line up with the preview.
+    fn stream_card(&mut self, ui: &mut Ui, cols: usize, height: f32) {
         let Ok(e) = &self.engine else { return };
         let streaming = e.session.state() == LENNY_STATE_STREAMING as i32;
         let st = e.session.stats();
-        let (vcam_real, vcam) = e.vcam_status();
+        let (vcam_real, _) = e.vcam_status();
         t::card(ui, "Stream", |ui| {
+            ui.set_min_height(height - 2.0 * (18.0 + t::BORDER));
             if streaming {
                 let res = self.video.as_ref().map_or("—".into(), |v| format!("{}×{}", v.source.0, v.source.1));
                 let ms = |us: i64| if us < 0 { "—".to_string() } else { format!("{:.0} ms", us as f64 / 1000.0) };
@@ -810,8 +854,8 @@ impl App {
                     ("Received", format!("{:.0} fps", self.rates.fps)),
                 ];
                 ui.spacing_mut().item_spacing.x = 10.0;
-                for pair in tiles.chunks(2) {
-                    ui.columns(2, |c| {
+                for pair in tiles.chunks(cols) {
+                    ui.columns(cols, |c| {
                         for (col, (l, v)) in c.iter_mut().zip(pair) {
                             t::stat_tile(col, l, v);
                         }
@@ -829,7 +873,6 @@ impl App {
                 ui.painter().circle(r.center(), 6.0, color, Stroke::new(t::BORDER, t::INK));
                 ui.label(RichText::new(text).font(t::body(15.0)).strong());
             });
-            ui.label(RichText::new(vcam).font(t::mono(12.0)).color(t::TEXT_MUTED));
         });
     }
 
@@ -894,4 +937,18 @@ fn qr_texture(ctx: &egui::Context, text: &str) -> Option<TextureHandle> {
         }
     }
     Some(ctx.load_texture("qr", img, TextureOptions::NEAREST))
+}
+
+/// The address chips for one connection method, and the port.
+fn addresses(ui: &mut Ui, ips: &[String], port: u16, none: &str) {
+    if ips.is_empty() {
+        hint(ui, none);
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        for ip in ips {
+            t::copy_chip(ui, ip);
+        }
+        t::copy_chip(ui, &port.to_string());
+    });
 }

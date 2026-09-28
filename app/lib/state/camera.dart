@@ -34,8 +34,8 @@ class CameraControls {
 
   bool get focusLocked => afMode == 1;
 
-  /// Everything on Auto, i.e. what "Auto" resets to. A tap-to-focus (focusing or held) is Manual.
-  bool get isAuto => afMode == 0 && exposureEvMilli == 0 && !aeLock && !awbLock;
+  /// Focus is Manual: a tap-to-focus is focusing or holding.
+  bool get focusManual => afMode != 0;
 }
 
 /// A camera command, as sent to lenny_control / the phone plugin.
@@ -48,5 +48,5 @@ abstract final class Commands {
       (cmd: lenny_control_cmd.LENNY_CTL_EXPOSURE_LOCK.value, value: on ? 1 : 0);
   static CameraCommand exposure(int evMilli) => (cmd: lenny_control_cmd.LENNY_CTL_EXPOSURE_COMP.value, value: evMilli);
   static CameraCommand lens(int id) => (cmd: lenny_control_cmd.LENNY_CTL_SELECT_LENS.value, value: id);
-  static final CameraCommand auto = (cmd: lenny_control_cmd.LENNY_CTL_RESET_AUTO.value, value: 0);
+  static final CameraCommand focusAuto = (cmd: lenny_control_cmd.LENNY_CTL_FOCUS_AUTO.value, value: 0);
 }

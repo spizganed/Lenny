@@ -64,6 +64,22 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
     ref.read(senderProvider.notifier).connect(pc.hosts.first, pc.port);
   }
 
+  /// The phone turned: the new layout fades (and settles from 96 % scale) in instead of snapping. Reduced motion:
+  /// fade only (design.md).
+  Widget _rotating(BuildContext context, Orientation o, Widget Function() layout) {
+    final still = MediaQuery.of(context).disableAnimations;
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 280),
+      switchInCurve: Curves.easeOut,
+      layoutBuilder: (current, previous) => current ?? const SizedBox(),
+      transitionBuilder: (child, t) => FadeTransition(
+        opacity: t,
+        child: still ? child : ScaleTransition(scale: Tween(begin: 0.96, end: 1.0).animate(t), child: child),
+      ),
+      child: KeyedSubtree(key: ValueKey(o), child: layout()),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = ref.watch(senderProvider);
@@ -72,7 +88,7 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
     return Scaffold(
       body: SafeArea(
         child: OrientationBuilder(
-          builder: (context, o) {
+          builder: (context, o) => _rotating(context, o, () {
             final title = Text(Brand.appName, style: LennyTokens.wordmark(32));
             final wide = o == Orientation.landscape;
             final hero = _StatusHero(state: s, compact: wide);
@@ -233,7 +249,7 @@ class _SenderScreenState extends ConsumerState<SenderScreen> {
                 ]),
               ),
             );
-          },
+          }),
         ),
       ),
     );

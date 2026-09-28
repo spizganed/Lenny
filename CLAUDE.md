@@ -121,9 +121,24 @@ Rust desktop is the target, the Flutter desktop is not worth changing):
   USB tether folded behind one segmented control each (desktop USB ADB runs `adb reverse`,
   `desktop/src/adb.rs`); smaller preview and two card columns so a maximized desktop and a
   landscape phone don't scroll (checked on Honor X5c Plus, 1536x816 desktop).
-- Known devices: the desktop lists known phones, but a click can't connect
-  (the phone always connects to the PC, ADR-0001), so quick connect belongs on
-  the phone. The phone has no known-PCs list, only the last PC prefilled.
+- Done 2026-09-28 (second pass, tested on Nothing Phone (3a) over Wi-Fi + USB tether and Honor over
+  USB tether): desktop title bar = status chip + phone name/battery pill + Disconnect (no connection card
+  while streaming, no LIVE badge); preview top-left, stream card under a landscape preview / beside a
+  portrait one (portrait runs to the window bottom), aspect eases on rotation; phone layout fades on
+  rotation; sliders update the camera while dragging; Manual/USB tether show only their own IPs
+  (adapter description on Windows, USB driver on Linux; VPN/VM adapters hidden); known-phones list
+  removed from the desktop (still saved for trust); vcam status line only "active"; pan only offered
+  on FREEFORM-cropping cameras (Nothing and Honor are CENTER_ONLY: zoom works, pan can't); focus
+  Auto | Manual with exposure slider + lock always shown, tap-to-focus sets AF regions only;
+  congestion control fixed (it cascaded to 1 Mbps in 1.5 s: now drops the whole backlog, one cut per
+  second, +20%/2 s back). Lag the user saw was mostly 2.4 GHz Wi-Fi: 5 GHz / USB tether = ~30 ms.
+  Tried and reverted: AE fps range [15,30] (choppy motion), hidden low-light +EV, face-priority AE.
+- Pending: both virtual cameras now register as plain "Lenny" (was "Lenny (Classic)") but that
+  needs a rebuilt installer (`installer\build.ps1`) + reinstall; not done yet. Windows still adds
+  " (Windows Virtual Camera)" to the MF one in some apps. Discord mirrors its own self-view: not a bug.
+- Pending: phone portrait on the Honor truncates button labels ("Scan …", "Find P…", "USB").
+- Known devices: the desktop no longer lists known phones (2026-09-28, user: not needed;
+  still saved for trust). Quick connect belongs on the phone (ADR-0001). The phone has no known-PCs list, only the last PC prefilled.
   Wanted: a list below the connection buttons, tap = connect, at least the last PC.
 - Preview box: still follows the video's aspect (Task 6); the user asked for it smaller
   (done), not for a fixed 16:9 box.

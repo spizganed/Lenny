@@ -189,13 +189,15 @@ default **Auto** control state (protocol.md §6.9: every connect and reconnect s
   `CONTROL_ZOOM_RATIO`, no session restart; other lenses reopen the camera. Output size is picked
   explicitly (exact, else same aspect ratio), so the stream keeps the negotiated size on every lens.
 - Request: `CONTROL_AF_MODE_CONTINUOUS_VIDEO`, `CONTROL_AE_MODE_ON`,
-  `CONTROL_AE_TARGET_FPS_RANGE=[30,30]` (or the chosen fps), `CONTROL_AE_ANTIBANDING_MODE_AUTO`,
+  `CONTROL_AE_TARGET_FPS_RANGE=[30,30]` (or the chosen fps; [15,30] was tried and made
+  motion choppy in a dim room), `CONTROL_AE_ANTIBANDING_MODE_AUTO`,
   `CONTROL_AWB_MODE_AUTO`, `CONTROL_VIDEO_STABILIZATION_MODE_OFF` (EIS buffers frames ahead).
 - Orientation: from the orientation sensor (`OrientationEventListener`), so it's right whichever way the
   phone stands; flat on a table keeps the last value.
-- Two modes, Auto and Manual (protocol.md §6.9). Tap-to-focus (Manual): receiver sends `CONTROL focus_at(x,y)` in
-  normalized upright coords. Sender maps it to an AF/AE region in the visible part of the active array, triggers AF
-  and holds focus there until Auto. Every connect and reconnect starts in Auto.
+- Focus Auto | Manual, exposure always the user's or the camera's (protocol.md §6.9). Tap-to-focus (Manual): receiver
+  sends `CONTROL focus_at(x,y)` in normalized upright coords. Sender maps it to an AF region (not AE: exposure stays with
+  the camera's metering or the EV slider) in the visible part of the active array, triggers AF and holds focus there
+  until focus Auto. Every connect and reconnect starts in Auto.
 - 60 fps: normal AE ranges usually stop at 30, so 60 fps modes come from the high-speed list
   (`CONSTRAINED_HIGH_SPEED_VIDEO`) and stream in a constrained high-speed session (request bursts, fps range 60..120,
   encoder capped with `KEY_MAX_FPS_TO_ENCODER`). Offered modes are exact 16:9 and 4:3 only. A mode the encoder or
@@ -204,6 +206,8 @@ default **Auto** control state (protocol.md §6.9: every connect and reconnect s
   StreamConfigurationMap, AE fps ranges and the AVC encoder, no hardcoded size list; and its zoom range
   (`CONTROL_ZOOM_RATIO_RANGE`, or 1..`SCALER_AVAILABLE_MAX_DIGITAL_ZOOM` before API 30, crop only). Discovery runs at
   every Connect. The stream only ever uses a mode the current lens lists.
+- Pan is offered only on cameras with `SCALER_CROPPING_TYPE_FREEFORM`: CENTER_ONLY ones (Nothing Phone (3a), Honor X5c
+  Plus) ignore where the crop sits, so they get zoom without pan.
 - Zoom and pan on the sensor readout: `CONTROL_ZOOM_RATIO` (the platform switches physical sensors) plus
   `SCALER_CROP_REGION` to move the zoomed window over the full field of view; never a transform of finished frames.
 - MediaCodec: `video/avc`, `COLOR_FormatSurface`, CBR/VBR bitrate from CAPS_SELECT,
@@ -293,7 +297,8 @@ to the format the consumer picked, so the receiver app writes one frame at one s
 - Same crash-containment rules. A crash here kills Frame Server's worker, not the consumer app,
   but it still breaks every camera on the system until it restarts, so it's treated just as seriously.
 - If both backends are present, MF-aware apps may list two "Lenny" cameras. The MF vcam is named
-  "Lenny" and the DirectShow one "Lenny (Classic)" on Win11. Revisit after M5 testing.
+  "Lenny" and so is the DirectShow one (2026-09-28, the user's call; it was "Lenny (Classic)"). Windows adds
+  " (Windows Virtual Camera)" to the MF one in some apps.
 
 ### 7.5 Discovery and USB helpers
 - LAN discovery (replaces the earlier mDNS plan): the phone broadcasts the UDP probe `LENNY?1` to port
@@ -331,10 +336,14 @@ backends.
 - **Renderer**: wgpu on DirectX 12 on Windows, OpenGL (glow) on Linux. On Windows + NVIDIA, OpenGL spent 3x the UI
   thread's CPU in the driver's buffer swap and the app felt laggy (2026-09-27).
 - **Layout**: computed from the window size every frame (fractions + clamps), aimed at no scrolling. From 1300 px:
-  preview (top-aligned) + cards in two columns (52 % of the width). 1000–1300 px: video + stream cards under the
+  preview (top-left) + cards in two columns (52 % of the width); the stream card sits under a landscape preview at its
+  width, or beside a portrait one at its height (that preview then runs to the window's bottom). While streaming, the
+  phone's name + battery pill and Disconnect sit in the title bar next to the status chip, and the connection card hides. 1000–1300 px: video + stream cards under the
   preview, the rest in one side column. Narrow (< 1000 px): one scrolling column. The window opens maximized the first
   time, then as it was left (`window.ron` in the config dir).
-- **Connection card**: QR first; Manual (IPs + port), USB ADB and USB tether folded behind one segmented control.
+- **Connection card**: QR first; Manual (Wi-Fi/LAN IPs + port), USB ADB and USB tether (tethering adapter IP + port)
+  folded behind one segmented control. Adapters are told apart by their description (Windows) or USB driver (Linux),
+  since Android picks a random tethering subnet; VPN/VM adapters are left out. Known phones are saved but not listed.
   USB ADB (`adb.rs`): while that panel is open, `adb devices` every 2 s and `adb reverse tcp:PORT tcp:PORT` for each
   authorized phone, with the user's own adb (PATH or the Android SDK; nothing bundled); the phone then connects to
   127.0.0.1. The panel says what's missing (no adb, no phone, "allow USB debugging").
@@ -350,7 +359,7 @@ backends.
 - **Preview** (Task 6): the box is sized to the decoded frame's real aspect ratio after rotation, never the
   requested one and never a hardcoded 16:9; it re-measures when the size changes, and never stretches.
 - **Controls**: lens, zoom (slider and mouse wheel), drag-to-pan on the preview when zoomed (protocol 1.1 pan, capture-
-  level on the phone), torch; Auto | Manual (tap-to-focus holds, EV, exposure lock); video modes from the selected
+  level on the phone), torch; focus Auto | Manual (tap-to-focus holds); EV slider and exposure lock, always shown; video modes from the selected
   lens's own list; stats; virtual camera status ("active" or "unavailable in this environment").
 - **`lenny_vcam`**: `IVirtualCamera { open(format), write_frame(&[u8]), close(), is_real(), describe() }`, I420.
   Backends: `V4l2LoopbackCamera` (Linux; finds a v4l2loopback device or tries `modprobe` once),

@@ -543,7 +543,7 @@ class Pipeline(private val context: Context) : SenderListener {
             if (region != null) {
                 b.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_AUTO)
                 b.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(region))
-                b.set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(region))
+                // Focus only: exposure stays with the camera's metering or the user's slider (2026-09-28).
             } else if (CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_VIDEO in afModes) {
                 b.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
             }
@@ -764,7 +764,10 @@ class Pipeline(private val context: Context) : SenderListener {
             if (l.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true) c = c or LennyNative.CAP_EXPOSURE_LOCK
             if (l.get(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true) c = c or LennyNative.CAP_WB_LOCK
             if (hasFlash(l)) c = c or LennyNative.CAP_TORCH
-            if (zoomRange(l).second > 1f) c = c or LennyNative.CAP_ZOOM or LennyNative.CAP_PAN
+            if (zoomRange(l).second > 1f) c = c or LennyNative.CAP_ZOOM
+            // Pan moves the crop region; CENTER_ONLY cameras (Nothing Phone (3a), Honor X5c Plus) ignore where it sits.
+            val freeform = l.get(CameraCharacteristics.SCALER_CROPPING_TYPE) == CameraMetadata.SCALER_CROPPING_TYPE_FREEFORM
+            if (zoomRange(l).second > 1f && freeform) c = c or LennyNative.CAP_PAN
         }
         if (lenses.size > 1) c = c or LennyNative.CAP_LENS
         return c
@@ -927,8 +930,11 @@ class Pipeline(private val context: Context) : SenderListener {
                 ?: Size(w, h)
         }
 
-        /** Exact [fps, fps] if the camera has it, else the narrowest range that still reaches fps. */
-        private fun fpsRange(ranges: Array<Range<Int>>?, fps: Int): Range<Int>? =
+        /**
+         * Exact [fps, fps] if the camera has it, else the narrowest range that still reaches fps. Not [15, 30]: in a dim
+         * room that dropped to 15 fps and moving the phone looked choppy (2026-09-28); Manual +EV brightens a dark room.
+         */
+        internal fun fpsRange(ranges: Array<Range<Int>>?, fps: Int): Range<Int>? =
             ranges?.firstOrNull { it.lower == fps && it.upper == fps }
                 ?: ranges?.filter { it.upper >= fps }?.minByOrNull { it.upper - it.lower }
 

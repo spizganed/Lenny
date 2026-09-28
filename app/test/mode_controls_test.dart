@@ -1,4 +1,4 @@
-// Auto / Manual (Task 5), as a widget test: the JVM/emulator-free way to cover the UI logic in this sandbox.
+// Focus Auto / Manual and the always-there exposure controls, as a widget test: the JVM/emulator-free way to cover the UI logic in this sandbox.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -27,30 +27,28 @@ void main() {
     return sent;
   }
 
-  testWidgets('Auto shows no manual controls; Manual reveals them without changing the camera', (tester) async {
+  testWidgets('exposure is always there; Manual focus only adds the tap hint and sends nothing', (tester) async {
     final sent = await pump(tester, const CameraControls());
-    expect(find.byType(ExposureSlider), findsNothing);
-    expect(find.text('Lock exposure'), findsNothing);
-    await tester.tap(find.text('Manual'));
-    await tester.pump();
     expect(find.byType(ExposureSlider), findsOneWidget);
     expect(find.text('Lock exposure'), findsOneWidget);
+    expect(find.text('Tap the preview.'), findsNothing);
+    await tester.tap(find.text('Manual'));
+    await tester.pump();
     expect(find.text('Tap the preview.'), findsOneWidget);
-    expect(sent, isEmpty); // just showing the controls sends nothing
+    expect(sent, isEmpty); // picking Manual waits for a tap
   });
 
-  testWidgets('a camera with anything manual set is shown as Manual; Auto resets it', (tester) async {
+  testWidgets('held focus shows as Manual; Auto sends focus_auto and leaves exposure alone', (tester) async {
     final sent = await pump(tester, const CameraControls(afMode: 1, exposureEvMilli: 500));
-    expect(find.byType(ExposureSlider), findsOneWidget);
     expect(find.textContaining('Focus held'), findsOneWidget);
     await tester.tap(find.text('Auto'));
     await tester.pump();
-    expect(sent, [Commands.auto]);
+    expect(sent, [Commands.focusAuto]);
   });
 
-  test('tap-to-focus (focusing or held) is not Auto', () {
-    expect(const CameraControls().isAuto, isTrue);
-    expect(const CameraControls(afMode: 2).isAuto, isFalse);
-    expect(const CameraControls(aeLock: true).isAuto, isFalse);
+  test('tap-to-focus (focusing or held) is Manual focus', () {
+    expect(const CameraControls().focusManual, isFalse);
+    expect(const CameraControls(afMode: 2).focusManual, isTrue);
+    expect(const CameraControls(exposureEvMilli: 500).focusManual, isFalse);
   });
 }

@@ -229,7 +229,8 @@ impl Engine {
         let mut t = self.token.lock().unwrap();
         if t.as_ref().is_none_or(|(_, at)| at.elapsed() > TOKEN_RENEW) {
             let token = self.session.new_pair_token(90_000);
-            let uri = pair_uri(&local_ipv4s(), self.session.port(), Some(&token), &self.name);
+            let (lan, usb) = local_ipv4s();
+            let uri = pair_uri(&[lan, usb].concat(), self.session.port(), Some(&token), &self.name);
             *t = Some((uri, Instant::now()));
         }
         t.as_ref().unwrap().0.clone()
@@ -264,17 +265,6 @@ impl Engine {
     /// (real device?, one-line description).
     pub fn vcam_status(&self) -> (bool, String) {
         self.vcam_status.lock().unwrap().clone()
-    }
-
-    pub fn known_phones(&self) -> Vec<([u8; 16], String)> {
-        self.known.lock().unwrap().iter().map(|(k, v)| (*k, v.clone())).collect()
-    }
-
-    /// Stops remembering a phone. The running session can't un-trust it, so it takes effect at the next start.
-    pub fn forget(&self, id: &[u8; 16]) {
-        let mut k = self.known.lock().unwrap();
-        k.remove(id);
-        save_known(&k);
     }
 
     pub fn control(&self, cmd: lenny_control_cmd, x: u16, y: u16, value: i32) {
@@ -558,15 +548,87 @@ fn base64url(b: &[u8]) -> String {
 }
 
 /// This PC's IPv4 addresses a phone could reach (no loopback, no link-local).
-pub fn local_ipv4s() -> Vec<String> {
-    if_addrs::get_if_addrs()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|i| match i.ip() {
-            std::net::IpAddr::V4(a) if !a.is_loopback() && !a.is_link_local() => Some(a.to_string()),
-            _ => None,
-        })
-        .collect()
+/// This PC's IPv4 addresses as (Wi-Fi/LAN, USB tethering). VPN, VM and container adapters are left out: a phone
+/// can't reach them.
+pub fn local_ipv4s() -> (Vec<String>, Vec<String>) {
+    #[cfg(windows)]
+    let descriptions = adapter_descriptions();
+    let (mut lan, mut usb) = (vec![], vec![]);
+    for i in if_addrs::get_if_addrs().unwrap_or_default() {
+        let std::net::IpAddr::V4(a) = i.ip() else { continue };
+        if a.is_loopback() || a.is_link_local() {
+            continue;
+        }
+        #[cfg(windows)]
+        let kind = adapter_kind(i.index.and_then(|n| descriptions.get(&n)).map_or("", |d| d));
+        #[cfg(not(windows))]
+        let kind = adapter_kind(&i.name);
+        match kind {
+            Some(true) => usb.push(a.to_string()),
+            Some(false) => lan.push(a.to_string()),
+            None => {}
+        }
+    }
+    (lan, usb)
+}
+
+/// Some(true) = USB tethering, Some(false) = Wi-Fi/LAN, None = virtual. From the adapter's description
+/// ("Remote NDIS based Internet Sharing Device", "UsbNcm Host Device"): Android picks a random subnet for tethering.
+#[cfg(windows)]
+fn adapter_kind(description: &str) -> Option<bool> {
+    let d = description.to_lowercase();
+    if d.contains("remote ndis") || d.contains("ncm") {
+        return Some(true);
+    }
+    let virt =
+        ["virtual", "vpn", "tunnel", "tailscale", "wireguard", "zerotier", "vmware", "virtualbox", "tap-windows"];
+    (!virt.iter().any(|v| d.contains(v))).then_some(false)
+}
+
+/// Adapter descriptions by interface index (if_addrs only has the friendly name, e.g. "Ethernet 4").
+#[cfg(windows)]
+fn adapter_descriptions() -> std::collections::HashMap<u32, String> {
+    use windows_sys::Win32::NetworkManagement::IpHelper::*;
+    let mut out = std::collections::HashMap::new();
+    let mut len = 16 * 1024u32;
+    let mut buf: Vec<u64> = vec![]; // u64: the list needs 8-byte alignment
+    let mut r = 111; // ERROR_BUFFER_OVERFLOW: retry once with the size Windows asked for
+    for _ in 0..2 {
+        buf.resize(len as usize / 8 + 1, 0);
+        let flags =
+            GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER | GAA_FLAG_SKIP_FRIENDLY_NAME;
+        // SAFETY: buf holds at least `len` bytes; AF_INET = 2.
+        r = unsafe { GetAdaptersAddresses(2, flags, std::ptr::null(), buf.as_mut_ptr().cast(), &mut len) };
+        if r != 111 {
+            break;
+        }
+    }
+    if r != 0 {
+        return out;
+    }
+    let mut p = buf.as_ptr() as *const IP_ADAPTER_ADDRESSES_LH;
+    // SAFETY: a linked list inside buf, filled by GetAdaptersAddresses; Description is a NUL-terminated UTF-16 string.
+    while let Some(a) = unsafe { p.as_ref() } {
+        let d = a.Description;
+        if !d.is_null() {
+            let n = (0..).take_while(|&k| unsafe { *d.add(k) } != 0).count();
+            let text = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(d, n) });
+            out.insert(unsafe { a.Anonymous1.Anonymous.IfIndex }, text);
+        }
+        p = a.Next;
+    }
+    out
+}
+
+/// Linux: tethering is a USB network driver; virtual adapters go by their usual name prefixes.
+#[cfg(not(windows))]
+fn adapter_kind(name: &str) -> Option<bool> {
+    let driver = std::fs::read_link(format!("/sys/class/net/{name}/device/driver")).unwrap_or_default();
+    if matches!(driver.file_name().and_then(|n| n.to_str()), Some("rndis_host" | "cdc_ncm")) {
+        return Some(true);
+    }
+    let virt = ["docker", "virbr", "veth", "br-", "vboxnet", "vmnet", "tailscale", "wg", "tun", "tap", "zt"];
+    (!virt.iter().any(|v| name.starts_with(v))).then_some(false)
 }
 
 fn host_name() -> String {
@@ -641,6 +703,17 @@ mod tests {
         assert_eq!(base64url(b"fo"), "Zm8");
         assert_eq!(base64url(b"foo"), "Zm9v");
         assert_eq!(base64url(&[0u8; 16]).len(), 22);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn adapter_kinds() {
+        assert_eq!(adapter_kind("Remote NDIS based Internet Sharing Device"), Some(true));
+        assert_eq!(adapter_kind("UsbNcm Host Device"), Some(true));
+        assert_eq!(adapter_kind("TP-Link Wireless MU-MIMO USB Adapter"), Some(false));
+        assert_eq!(adapter_kind("VirtualBox Host-Only Ethernet Adapter"), None);
+        assert_eq!(adapter_kind("Hyper-V Virtual Ethernet Adapter"), None);
+        assert_eq!(adapter_kind("Tailscale Tunnel"), None);
     }
 
     #[test]

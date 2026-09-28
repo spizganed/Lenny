@@ -159,6 +159,11 @@ pub enum Kind {
 
 /// Full-width button (§4 Buttons). Disabled: no shadow, well fill, muted text, no press.
 pub fn button(ui: &mut Ui, label: &str, kind: Kind, enabled: bool) -> Response {
+    button_h(ui, label, kind, enabled, 52.0)
+}
+
+/// `button` at another height (44 in the title bar).
+pub fn button_h(ui: &mut Ui, label: &str, kind: Kind, enabled: bool, height: f32) -> Response {
     let (fill, fg, shadow) = match kind {
         Kind::Primary => (YELLOW, INK, SH_PRIMARY),
         Kind::Destructive => (CORAL, INK, SH_PRIMARY),
@@ -166,7 +171,7 @@ pub fn button(ui: &mut Ui, label: &str, kind: Kind, enabled: bool) -> Response {
     };
     let (fill, fg, shadow) = if enabled { (fill, fg, shadow) } else { (WELL, TEXT_MUTED, 0.0) };
     // The shadow is part of the allocation, so shadowed and flat widgets line up on the right.
-    let size = vec2(ui.available_width() - shadow, 52.0);
+    let size = vec2(ui.available_width() - shadow, height);
     let (rect, r) =
         ui.allocate_exact_size(size + Vec2::splat(shadow), if enabled { Sense::click() } else { Sense::hover() });
     let rect = Rect::from_min_size(rect.min, size);
@@ -258,13 +263,17 @@ pub fn switch(ui: &mut Ui, id: &str, on: bool) -> bool {
 }
 
 /// Status chip (§4): pill, dot in the status colour, bold label.
-pub fn status_chip(ui: &mut Ui, color: Color32, label: &str, fill: Color32) {
+/// No dot (`color` None): a plain info pill in the same style, e.g. the phone's name and battery.
+pub fn status_chip(ui: &mut Ui, color: Option<Color32>, label: &str, fill: Color32) {
     let galley = ui.painter().layout_no_wrap(label.to_string(), body(15.0), TEXT);
-    let size = vec2(galley.size().x + 58.0, 42.0);
+    let text_x = if color.is_some() { 40.0 } else { 18.0 };
+    let size = vec2(galley.size().x + text_x + 18.0, 42.0);
     let (outer, _) = ui.allocate_exact_size(size + Vec2::splat(SH_SMALL), Sense::hover());
     let face = paint_sticker(ui, Rect::from_min_size(outer.min, size), fill, R_PILL, SH_SMALL, 0.0);
-    ui.painter().circle(pos2(face.left() + 22.0, face.center().y), 7.0, color, Stroke::new(BORDER, INK));
-    ui.painter().galley(pos2(face.left() + 40.0, face.center().y - galley.size().y / 2.0), galley, TEXT);
+    if let Some(color) = color {
+        ui.painter().circle(pos2(face.left() + 22.0, face.center().y), 7.0, color, Stroke::new(BORDER, INK));
+    }
+    ui.painter().galley(pos2(face.left() + text_x, face.center().y - galley.size().y / 2.0), galley, TEXT);
 }
 
 /// Copy chip (§4): mono value + copy icon; a tap copies it and flashes a check for a second.
@@ -321,11 +330,21 @@ pub fn badge(ui: &Ui, at: egui::Pos2, align_right: bool, text: &str, fill: Color
 
 /// Exposure-style slider (§4): pill track, hard-edged lilac fill, bordered thumb. The value moves while dragging;
 /// Some(value) is returned once, on release (one camera change, not thirty).
+/// Returns a value while dragging (at most every 60 ms, when the snapped value changes) and on release, so the camera
+/// follows the thumb. After release the thumb stays put until the phone reports the value (or 0.6 s pass), instead of
+/// jumping back for a round trip.
 pub fn slider(ui: &mut Ui, id: &str, value: f32, range: std::ops::RangeInclusive<f32>, step: f32) -> Option<f32> {
     let key = Id::new(id);
+    let sent_key = key.with("sent");
     let (lo, hi) = (*range.start(), *range.end());
+    let now = ui.input(|i| i.time);
     let drag: Option<f32> = ui.data(|d| d.get_temp(key));
-    let shown = drag.unwrap_or(value).clamp(lo, hi);
+    let sent: Option<(f32, f64)> = ui.data(|d| d.get_temp(sent_key));
+    let pending = sent.filter(|&(v, at)| drag.is_none() && v != value && now - at < 0.6).map(|(v, _)| v);
+    if pending.is_some() {
+        ui.ctx().request_repaint();
+    }
+    let shown = drag.or(pending).unwrap_or(value).clamp(lo, hi);
     let thumb = 34.0;
     let size = vec2(ui.available_width(), thumb + SH_SMALL);
     let (rect, r) = ui.allocate_exact_size(size, Sense::click_and_drag());
@@ -349,15 +368,25 @@ pub fn slider(ui: &mut Ui, id: &str, value: f32, range: std::ops::RangeInclusive
             v
         }
     };
-    if let Some(p) = r.interact_pointer_pos() {
-        if r.dragged() || r.is_pointer_button_down_on() {
-            ui.data_mut(|d| d.insert_temp(key, at(p.x)));
-        }
-    }
     if r.drag_stopped() || r.clicked() {
         let v = r.interact_pointer_pos().map(|p| at(p.x)).or(drag).unwrap_or(shown);
-        ui.data_mut(|d| d.remove::<f32>(key));
+        ui.data_mut(|d| {
+            d.remove::<f32>(key);
+            d.insert_temp(sent_key, (v, now));
+        });
         return Some(v);
+    }
+    if let Some(p) = r.interact_pointer_pos() {
+        if r.dragged() || r.is_pointer_button_down_on() {
+            // The thumb follows the pointer smoothly; the camera gets the snapped value.
+            let t = ((p.x - track.left() - thumb / 2.0) / (track.width() - thumb)).clamp(0.0, 1.0);
+            ui.data_mut(|d| d.insert_temp(key, lo + t * (hi - lo)));
+            let v = at(p.x);
+            if sent.is_none_or(|(last, t)| last != v && now - t > 0.06) {
+                ui.data_mut(|d| d.insert_temp(sent_key, (v, now)));
+                return Some(v);
+            }
+        }
     }
     None
 }

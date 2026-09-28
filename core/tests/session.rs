@@ -449,6 +449,7 @@ fn slow_network_drops_to_keyframe_and_lowers_bitrate_without_blocking() {
     assert!(txs.keyframes.load(SeqCst) > 1); // one at stream start, more after drops
     let kbps = txs.kbps.load(SeqCst);
     assert!(kbps > 0 && kbps < 2000); // bitrate stepped down
+    assert!(kbps >= 1280, "cut {kbps}: one congested burst must not cascade (at most one cut per second)");
     assert_eq!(st.bitrate_kbps, kbps);
     assert!(wait_for(|| slow.frames.load(SeqCst) > 0)); // some got through...
     assert!(slow.frames.load(SeqCst) < 300); // ...but not the whole backlog

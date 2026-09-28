@@ -30,10 +30,8 @@ class LensPicker extends StatelessWidget {
       );
 }
 
-/// The two camera modes, always both visible. Auto: continuous autofocus, auto exposure/ISO at EV 0, nothing else to
-/// set. Manual: tap the preview to focus there (the focus holds; that's the lock), exposure compensation and exposure
-/// lock. Going back to Auto resets all of it (reset_auto). The camera is in Manual whenever anything manual is set,
-/// wherever it was set; pressing Manual here only shows the controls.
+/// Focus: Auto (the camera's continuous autofocus) or Manual (tap the preview to focus; it holds there). Exposure: the
+/// slider and lock are always there; at 0 the camera's own auto exposure decides, nothing of ours on top.
 class ModeControls extends StatefulWidget {
   const ModeControls({
     super.key,
@@ -54,40 +52,43 @@ class ModeControls extends StatefulWidget {
 }
 
 class _ModeControlsState extends State<ModeControls> {
-  bool _manual = false; // Manual picked here, before anything manual was set
+  bool _manual = false; // Manual focus picked here, before any tap
 
   @override
   Widget build(BuildContext context) {
-    final manual = _manual || !widget.controls.isAuto;
+    final manual = _manual || widget.controls.focusManual;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      Segmented(
-        labels: const ['Auto', 'Manual'],
-        selected: manual ? 1 : 0,
-        onSelect: (i) {
-          setState(() => _manual = i == 1);
-          if (i == 0 && !widget.controls.isAuto) widget.onCommand(Commands.auto);
-        },
-      ),
-      if (manual) ...[
-        const SizedBox(height: 14),
-        if (widget.caps.has(LENNY_CAP_FOCUS))
+      if (widget.caps.has(LENNY_CAP_FOCUS)) ...[
+        Text('Focus', style: LennyTokens.button()),
+        const SizedBox(height: 10),
+        Segmented(
+          labels: const ['Auto', 'Manual'],
+          selected: manual ? 1 : 0,
+          onSelect: (i) {
+            setState(() => _manual = i == 1);
+            if (i == 0 && widget.controls.focusManual) widget.onCommand(Commands.focusAuto);
+          },
+        ),
+        if (manual) ...[
+          const SizedBox(height: 14),
           Text(
             widget.controls.focusLocked ? 'Focus held. ${widget.tapHint}' : widget.tapHint,
             style: LennyTokens.body(size: 14, color: LennyTokens.textMuted),
           ),
-        if (widget.caps.hasExposure) ...[
-          const SizedBox(height: 14),
-          ExposureSlider(
-            caps: widget.caps,
-            controls: widget.controls,
-            onCommand: widget.onCommand,
-            title: widget.exposureTitle,
-          ),
         ],
-        if (widget.caps.has(LENNY_CAP_EXPOSURE_LOCK)) ...[
-          const SizedBox(height: 14),
-          ExposureLockToggle(controls: widget.controls, onCommand: widget.onCommand),
-        ],
+      ],
+      if (widget.caps.hasExposure) ...[
+        const SizedBox(height: 14),
+        ExposureSlider(
+          caps: widget.caps,
+          controls: widget.controls,
+          onCommand: widget.onCommand,
+          title: widget.exposureTitle ?? 'Exposure',
+        ),
+      ],
+      if (widget.caps.has(LENNY_CAP_EXPOSURE_LOCK)) ...[
+        const SizedBox(height: 14),
+        ExposureLockToggle(controls: widget.controls, onCommand: widget.onCommand),
       ],
     ]);
   }
@@ -161,8 +162,7 @@ class TorchRow extends StatelessWidget {
       ]);
 }
 
-/// Exposure compensation. Dragging only moves the thumb; the command goes out on release (one camera change, not
-/// thirty). Arrow keys step it.
+/// Exposure compensation. While dragging the camera follows the thumb (at most every 60 ms); arrow keys step it.
 class ExposureSlider extends StatefulWidget {
   const ExposureSlider({super.key, required this.caps, required this.controls, required this.onCommand, this.title});
   final CameraCaps caps;
@@ -176,7 +176,10 @@ class ExposureSlider extends StatefulWidget {
 
 class _ExposureSliderState extends State<ExposureSlider> {
   static const _thumb = 34.0;
-  double? _drag; // EV*1000 while held
+  double? _drag; // EV*1000 while held, and after release until the phone reports it (no jump back meanwhile)
+  bool _holding = false;
+  int? _sent; // last value sent while dragging
+  DateTime _sentAt = DateTime(0);
 
   ({int min, int max, int step}) get _range => widget.caps.exposure!;
   int get _value => (_drag ?? widget.controls.exposureEvMilli.toDouble()).round().clamp(_range.min, _range.max);
@@ -193,9 +196,38 @@ class _ExposureSliderState extends State<ExposureSlider> {
     return r.min + f * (r.max - r.min);
   }
 
+  /// While dragging the camera follows the thumb: the snapped value, at most every 60 ms.
+  void _move(double v) {
+    setState(() {
+      _holding = true;
+      _drag = v;
+    });
+    final s = _snap(v);
+    final now = DateTime.now();
+    if (s != _sent && now.difference(_sentAt) > const Duration(milliseconds: 60)) {
+      _sent = s;
+      _sentAt = now;
+      widget.onCommand(Commands.exposure(s));
+    }
+  }
+
   void _send(int v) {
-    setState(() => _drag = null);
+    setState(() {
+      _holding = false;
+      _drag = v.toDouble();
+    });
+    _sent = null;
     if (v != widget.controls.exposureEvMilli) widget.onCommand(Commands.exposure(v));
+    // Stop holding the thumb if the phone reports something else (clamped) or nothing.
+    Future.delayed(const Duration(milliseconds: 600), () {
+      if (mounted && !_holding) setState(() => _drag = null);
+    });
+  }
+
+  @override
+  void didUpdateWidget(ExposureSlider old) {
+    super.didUpdateWidget(old);
+    if (!_holding && _drag?.round() == widget.controls.exposureEvMilli) _drag = null;
   }
 
   void _stepBy(int dir) {
@@ -248,10 +280,13 @@ class _ExposureSliderState extends State<ExposureSlider> {
                 final w = box.maxWidth;
                 return GestureDetector(
                   behavior: HitTestBehavior.opaque,
-                  onHorizontalDragStart: (d) => setState(() => _drag = _fromX(d.localPosition.dx, w)),
-                  onHorizontalDragUpdate: (d) => setState(() => _drag = _fromX(d.localPosition.dx, w)),
+                  onHorizontalDragStart: (d) => _move(_fromX(d.localPosition.dx, w)),
+                  onHorizontalDragUpdate: (d) => _move(_fromX(d.localPosition.dx, w)),
                   onHorizontalDragEnd: (_) => _send(_snap(_drag ?? _value.toDouble())),
-                  onHorizontalDragCancel: () => setState(() => _drag = null),
+                  onHorizontalDragCancel: () => setState(() {
+                    _holding = false;
+                    _drag = null;
+                  }),
                   onTapUp: (d) => _send(_snap(_fromX(d.localPosition.dx, w))),
                   child: SizedBox(
                     height: _thumb + LennyTokens.shadowSmall,

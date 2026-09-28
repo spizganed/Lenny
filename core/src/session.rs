@@ -35,7 +35,10 @@ const MAX_VIDEO_CONFIG: usize = 60000; // must fit one TLV field
 /// Measured in capture time, not bytes: a single keyframe can be bigger than 250 ms of average bitrate.
 const QUEUE_BUDGET_US: i64 = 250 * MS;
 const MIN_BITRATE_KBPS: u32 = 1000;
-const RAISE_INTERVAL: i64 = 5 * SEC; // healthy for this long -> +10% bitrate
+const RAISE_INTERVAL: i64 = 2 * SEC; // healthy for this long -> +20% bitrate (1 -> 8 Mbps in ~25 s)
+/// At most one bitrate cut per second: the previous cut needs time to show on the wire (it cascaded to the floor in
+/// 1.5 s while a Nothing Phone (3a) was moved around, 2026-09-28).
+const CUT_INTERVAL: i64 = SEC;
 /// Kernel send buffer on the phone. Autotuned buffers can grow to megabytes and hide a second of backlog from us.
 const SENDER_SOCKET_BUFFER: usize = 128 * 1024;
 /// run_link / dispatch result: keep going. Anything else is a LENNY_REASON_*.
@@ -174,12 +177,11 @@ struct Outgoing {
     payload: usize, // video bytes, for stats
     pts_us: i64,    // frames only
     frame: bool,
-    key: bool,
 }
 
 impl Outgoing {
     fn config(msg: Vec<u8>) -> Self {
-        Self { msg, payload: 0, pts_us: 0, frame: false, key: false }
+        Self { msg, payload: 0, pts_us: 0, frame: false }
     }
 }
 
@@ -198,20 +200,11 @@ struct Vq {
 }
 
 impl Vq {
-    /// Keep only the newest queued keyframe (and the config right before it): it's what the receiver can restart
-    /// from. Everything else, especially P-frames that depend on dropped frames, goes.
+    /// Everything queued goes; a fresh keyframe is on its way. (Keeping the newest queued keyframe, up to a second
+    /// old, made the next frame measure against it and count as congested again, over and over.)
     fn drop_backlog(&mut self) {
-        let mut keep = VecDeque::new();
-        if let Some(i) = self.q.iter().rposition(|o| o.key) {
-            if i > 0 && !self.q[i - 1].frame {
-                keep.push_back(self.q.remove(i - 1).unwrap());
-                keep.push_back(self.q.remove(i - 1).unwrap());
-            } else {
-                keep.push_back(self.q.remove(i).unwrap());
-            }
-        }
-        self.q = keep;
-        self.bytes = self.q.iter().map(|o| o.msg.len()).sum();
+        self.q.clear();
+        self.bytes = 0;
     }
 }
 
@@ -464,8 +457,11 @@ impl Session {
                 vq.drop_backlog();
                 vq.drop_until_key = true;
                 congested = true;
-                vq.last_congestion = now_us();
-                new_kbps = MIN_BITRATE_KBPS.max(vq.current_kbps * 8 / 10);
+                let now = now_us();
+                if now - vq.last_congestion > CUT_INTERVAL {
+                    new_kbps = MIN_BITRATE_KBPS.max(vq.current_kbps * 8 / 10);
+                }
+                vq.last_congestion = now;
                 if new_kbps == vq.current_kbps {
                     new_kbps = 0;
                 }
@@ -503,7 +499,7 @@ impl Session {
                 );
                 m[wire::HEADER_SIZE + meta_len..].copy_from_slice(data);
                 vq.bytes += m.len();
-                vq.q.push_back(Outgoing { msg: m, payload: data.len(), pts_us, frame: true, key });
+                vq.q.push_back(Outgoing { msg: m, payload: data.len(), pts_us, frame: true });
             }
         }
         if congested {
@@ -823,7 +819,7 @@ impl Inner {
                 let now = now_us();
                 if vq.current_kbps < vq.target_kbps && now - vq.last_congestion > RAISE_INTERVAL && now >= vq.next_raise
                 {
-                    vq.current_kbps = vq.target_kbps.min(vq.current_kbps * 11 / 10 + 1);
+                    vq.current_kbps = vq.target_kbps.min(vq.current_kbps * 12 / 10 + 1);
                     raised = vq.current_kbps;
                     vq.next_raise = now + RAISE_INTERVAL;
                 }

@@ -20,7 +20,7 @@ use windows::Win32::Media::MediaFoundation::{
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, IClassFactory, IClassFactory_Impl, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
-use windows::Win32::System::LibraryLoader::{GetModuleFileNameW, GetProcAddress, LoadLibraryW};
+use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
 use windows::Win32::System::Registry::{RegDeleteTreeW, RegSetKeyValueW, HKEY_CLASSES_ROOT, REG_SZ};
 use windows::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
 
@@ -127,21 +127,6 @@ fn set_value(key: &str, name: PCWSTR, value: &str) -> Result<()> {
     }
 }
 
-/// Windows 11 has MFCreateVirtualCamera; there the MF camera is "Lenny" and this one "Lenny (Classic)"
-/// (architecture.md §7.4).
-fn friendly_name() -> &'static str {
-    let win11 = unsafe {
-        LoadLibraryW(w!("mfsensorgroup.dll"))
-            .map(|m| GetProcAddress(m, windows::core::s!("MFCreateVirtualCamera")).is_some())
-            .unwrap_or(false)
-    };
-    if win11 {
-        "Lenny (Classic)"
-    } else {
-        "Lenny"
-    }
-}
-
 fn register_class(clsid: &str, name: &str, dll: &str) -> Result<()> {
     let key = format!("CLSID\\{clsid}");
     set_value(&key, PCWSTR::null(), name)?;
@@ -166,7 +151,9 @@ pub extern "system" fn DllRegisterServer() -> HRESULT {
             return Err(E_UNEXPECTED.into());
         }
         let path = String::from_utf16_lossy(&path[..n]);
-        let name = friendly_name();
+        // Both cameras are just "Lenny" (the user's call, 2026-09-28); Windows itself adds " (Windows Virtual Camera)"
+        // to the MF one in some apps.
+        let name = "Lenny";
         register_class(fb::DSHOW_FILTER_CLSID, name, &path)?;
         register_class(fb::MF_SOURCE_CLSID, "Lenny", &path)?;
 

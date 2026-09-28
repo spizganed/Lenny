@@ -271,7 +271,7 @@ impl IVirtualCamera for WindowsCamera {
     fn describe(&self) -> String {
         let buffer = if self.global { "Global\\" } else { "Local\\ (DirectShow only)" };
         let dshow = if clsid_registered(fb::DSHOW_FILTER_CLSID) {
-            "DirectShow \"Lenny (Classic)\" registered"
+            "DirectShow \"Lenny\" registered"
         } else {
             "DirectShow filter not registered (regsvr32 lenny_vcam_com.dll)"
         };
