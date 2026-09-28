@@ -42,6 +42,24 @@ SetCompressor /SOLID lzma
   File "${SRC}"
 !macroend
 
+; Uninstall: a camera DLL is kept loaded by every app that listed cameras (browsers, Discord, Frame Server...), so it
+; can't be deleted, but it can be moved on the same drive. Move it to TEMP and delete it there at the next reboot, so
+; the install folder goes now. Other drive (or no TEMP): delete in place at the next reboot.
+!macro un.DropDll FILE
+  Delete "${FILE}"
+  ${If} ${FileExists} "${FILE}"
+    GetTempFileName $R0
+    Delete $R0
+    ClearErrors
+    Rename "${FILE}" $R0
+    ${If} ${Errors}
+      Delete /REBOOTOK "${FILE}"
+    ${Else}
+      Delete /REBOOTOK $R0
+    ${EndIf}
+  ${EndIf}
+!macroend
+
 Function StartApp
   Exec '"$WINDIR\explorer.exe" "$INSTDIR\lenny-desktop.exe"'
 FunctionEnd
@@ -130,11 +148,10 @@ Section "Uninstall"
   Delete /REBOOTOK "$INSTDIR\lenny-desktop.exe"
   Delete /REBOOTOK "$INSTDIR\lenny-broker.exe"
   Delete "$INSTDIR\app_icon.ico"
-  ; Still loaded in a running Zoom/Chrome/...: removed on the next reboot.
-  Delete /REBOOTOK "$INSTDIR\lenny_vcam_com.dll"
-  Delete /REBOOTOK "$INSTDIR\lenny_vcam_com.dll.old"
-  Delete /REBOOTOK "$INSTDIR\x86\lenny_vcam_com.dll"
-  Delete /REBOOTOK "$INSTDIR\x86\lenny_vcam_com.dll.old"
+  !insertmacro un.DropDll "$INSTDIR\lenny_vcam_com.dll"
+  !insertmacro un.DropDll "$INSTDIR\lenny_vcam_com.dll.old"
+  !insertmacro un.DropDll "$INSTDIR\x86\lenny_vcam_com.dll"
+  !insertmacro un.DropDll "$INSTDIR\x86\lenny_vcam_com.dll.old"
   Delete "$INSTDIR\uninstall.exe"
   RMDir /REBOOTOK "$INSTDIR\x86"
   RMDir /REBOOTOK "$INSTDIR"
