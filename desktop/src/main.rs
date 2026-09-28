@@ -23,9 +23,10 @@ fn main() -> eframe::Result {
     let port = arg("--port").and_then(|p| p.parse().ok()).unwrap_or(lenny_core::LENNY_DEFAULT_PORT);
     let after = std::time::Duration::from_secs_f32(arg("--after").and_then(|s| s.parse().ok()).unwrap_or(3.0));
     let screenshot = arg("--screenshot").map(|p| (std::path::PathBuf::from(p), after));
-    let size = arg("--size")
-        .and_then(|s| s.split_once('x').and_then(|(w, h)| Some([w.parse().ok()?, h.parse().ok()?])))
-        .unwrap_or([1360.0, 860.0]);
+    let size =
+        arg("--size").and_then(|s| s.split_once('x').and_then(|(w, h)| Some([w.parse().ok()?, h.parse().ok()?])));
+    // Screenshot and --size runs get exactly the size asked for: no saved window, nothing saved.
+    let remember = screenshot.is_none() && size.is_none();
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
@@ -33,9 +34,34 @@ fn main() -> eframe::Result {
             .with_app_id("com.spizganed.lenny")
             // Borderless: the title bar, window buttons, drag and resize are ours (ui.rs), drawn per docs/design.md.
             .with_decorations(false)
-            .with_inner_size(size)
-            .with_min_inner_size([420.0, 560.0]),
+            .with_inner_size(size.unwrap_or([1360.0, 860.0]))
+            .with_min_inner_size([420.0, 560.0])
+            // First launch opens maximized; after that eframe restores the last size, position and maximized state.
+            .with_maximized(remember),
+        persist_window: remember,
+        persistence_path: lenny_desktop::receiver::config_dir().filter(|_| remember).map(|d| d.join("window.ron")),
+        #[cfg(windows)]
+        event_loop_builder: Some(Box::new(|b| {
+            use winit::platform::windows::EventLoopBuilderExtWindows;
+            b.with_msg_hook(restore_before_close);
+        })),
         ..Default::default()
     };
     eframe::run_native("Lenny Desktop", options, Box::new(move |cc| Ok(Box::new(ui::App::new(cc, port, screenshot)))))
+}
+
+/// Windows never paints a minimized window, and eframe only acts on a close request in its next frame, so "Close
+/// window" from the taskbar did nothing while minimized. Restore first; the close then goes through as usual (and the
+/// window state is saved un-minimized). Never consumes the message.
+#[cfg(windows)]
+fn restore_before_close(msg: *const std::ffi::c_void) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+    // SAFETY: winit hands us the MSG it is about to dispatch.
+    let m = unsafe { &*(msg as *const MSG) };
+    let close = m.message == WM_CLOSE || (m.message == WM_SYSCOMMAND && m.wParam & 0xFFF0 == SC_CLOSE as usize);
+    // SAFETY: plain Win32 calls on the window handle from the message.
+    if close && unsafe { IsIconic(m.hwnd) } != 0 {
+        unsafe { ShowWindow(m.hwnd, SW_RESTORE) };
+    }
+    false
 }
