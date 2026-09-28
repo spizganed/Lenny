@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.82"
 description = "Lenny core: wire protocol, session state machine, transport. Stable C ABI in include/lenny/lenny.h."
-license = "UNLICENSED"
+license = "GPL-3.0-only"
 publish = false
 
 [lib]

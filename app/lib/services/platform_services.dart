@@ -1,7 +1,6 @@
 import 'dart:typed_data';
 
 import 'package:android_camera/android_camera.dart';
-import 'package:windows_receiver/windows_receiver.dart';
 
 import '../state/camera.dart';
 import 'core_session.dart';
@@ -43,22 +42,4 @@ class SenderService {
     session.detach();
     await AndroidCamera.stop();
   }
-}
-
-/// Desktop side.
-class ReceiverService {
-  Future<({CoreSession session, int port, int textureId})> start(int port) async {
-    final r = await WindowsReceiver.start(port: port);
-    return (session: CoreSession(r.session), port: r.port, textureId: r.textureId);
-  }
-
-  Future<void> stop(CoreSession session) async {
-    session.detach();
-    await WindowsReceiver.stop();
-  }
-
-  /// Tap on the preview, normalised to its 16:9 box. True if it hit the picture (a focus command went out).
-  Future<bool> focusAt(double x, double y) => WindowsReceiver.focusAt(x, y);
-
-  Future<double?> displayLatencyMs() => WindowsReceiver.displayLatencyMs();
 }

@@ -15,7 +15,6 @@ Automated:
   mode matching (JVM, no device).
 - `app/test/mode_controls_test.dart`: Auto/Manual widget behaviour.
 - `app/`: `flutter test`.
-- `plugins/windows_receiver/windows/test/nv12_test.cpp`: preview converter (rotation + letterbox).
 
 Tools:
 - `cargo run --release --bin lenny_probe -- [port] [seconds]`: headless receiver that auto-accepts phones and prints fps, bitrate,
@@ -29,13 +28,16 @@ Tools:
   [5,30] is bright but drops to 20 fps. Kept [30,30]. 2026-09-28: [15,30] was tried for a dark room on the Nothing, but moving the phone got choppy at
   15 fps; back to [30,30]. A hidden low-light +2 EV in Auto was
   tried the same day and removed: Auto is the phone's own 3A, nothing on top; Manual EV brightens a dark room.
+  2026-09-28, Honor Magic7 Lite (BRP-NX1M), Lenny 1.0.0 over Wi-Fi: every camera
+  tried, no crashes, no bugs (user's run, by hand).
 - Emulator: the phone reaches the PC at `10.0.2.2`. The AVD's back camera should be `virtualscene`. Needs hardware
   acceleration (KVM / HAXM / Hyper-V); the cloud sandbox has none, so it isn't used there.
 - Fake phone: `cargo run -p lenny_desktop --example fake_phone -- <host> <port> [--portrait]`: a synthetic sender
   (openh264) for trying the desktop app without a phone. Not a camera test.
 - `lenny-desktop --screenshot out.png [--after s] [--size WxH]`: renders, saves a PNG, quits (Xvfb-friendly).
-- `tools/linux-test-vm.ps1` (Windows, elevated PowerShell): VirtualBox + Ubuntu 24.04 Xfce VM with v4l2loopback,
-  OBS, Discord, Chromium and Lenny Desktop built from a branch, bridged so a phone can connect. First boot ~20-40 min.
+- `tools/linux-test-vm.ps1` (Windows, elevated PowerShell): Hyper-V + Ubuntu 24.04 Xfce VM with v4l2loopback,
+  OBS, Discord, Chromium and Lenny Desktop built from a branch, on an external switch so a phone can connect. First
+  boot ~20-40 min; progress in `serial.log` next to the VM.
 
 Debug output (logs, dumps, captured streams) stays local and is gitignored. Never commit it.
 
@@ -106,17 +108,18 @@ Last run: 2026-09-26, Windows 11 Pro PC, Nothing Phone (3a) release APK from thi
 | 6 | Restart the desktop app | Phone reconnects by itself | ✅ |
 | 7 | Virtual camera | — | not run: `regsvr32` needs an elevated prompt (non-admin fails with code 5) |
 
-`tools/linux-test-vm.ps1` on this PC: the script itself works (VirtualBox via winget, IMAPI2 seed ISO, VM boots,
+The first, VirtualBox version of `tools/linux-test-vm.ps1` on this PC: the script itself works (VirtualBox via winget, IMAPI2 seed ISO, VM boots,
 cloud-init runs), but with Hyper-V on (WSL2 / VBS) VirtualBox runs on top of it and the guest hits RCU stalls and
 soft lockups (4 and 2 vCPUs alike), and bridging over a USB Wi-Fi adapter downloaded at ~60 kB/s (NAT: normal).
-Linux testing needs a different VM setup (e.g. Hyper-V itself); not done yet.
+The script now builds a Hyper-V VM instead (2026-09-28); not run yet.
 
 ## Windows virtual cameras (Rust, `vcam/com`)
 
 Last run: 2026-09-27, Windows 11 Pro (26200), installed with `installer\build.ps1` → `Lenny-Setup-0.1.0.exe`, fake phone
 and Nothing Phone (3a) over Wi-Fi, app started unelevated (Start menu / explorer) with the broker service running.
-Consumers driven by script: OpenCV (DirectShow) and headless Edge getUserMedia (Media Foundation); OBS, Zoom, Teams,
-Discord by hand still to do.
+Consumers driven by script: OpenCV (DirectShow) and headless Edge getUserMedia (Media Foundation). 2026-09-28, Lenny
+1.0.0: the user ran the by-hand list (Zoom, Teams, Discord in calls, OBS, 32-bit app, Win10, standard account) and
+reports it all passes; per-item details weren't recorded.
 
 Setup: install with the setup exe (elevated). For development without the installer, copy both DLLs somewhere
 **outside your user profile** (e.g. `C:\Program Files\Lenny\` and `...\x86\`) before `regsvr32`: Frame Server runs as
@@ -134,8 +137,8 @@ Camera)" and "Lenny (Classic)". Win11 also exposes the MF camera to DirectShow a
 | 2 | Start the app, phone streams | Live picture within 1 s, upright | | ✅ fake phone, both cameras 1280×720 |
 | 3 | Quit the app while a consumer is open | Last frame ≤ 0.5 s, then placeholder; consumer doesn't crash | | ✅ killed the app: last frame, placeholder after ~1.5 s (heartbeat 1 s + 0.5 s), consumer kept reading |
 | 4 | Chrome/Edge getUserMedia (webcamtests.com) | Camera listed, live | | ✅ headless Edge: both listed, live |
-| 5 | Zoom, Teams, Discord | Camera listed, live, call keeps running through app restarts | | Brave/Discord loaded the DLL on enumeration without crashing; not tried in a call |
-| 6 | 32-bit consumer (a 32-bit DirectShow app, e.g. AMCap x86) | Live | | x86 DLL registered; not run |
+| 5 | Zoom, Teams, Discord | Camera listed, live, call keeps running through app restarts | ✅ user, in calls (1.0.0) | ✅ user, in calls (1.0.0) |
+| 6 | 32-bit consumer (a 32-bit DirectShow app, e.g. AMCap x86) | Live | ✅ user (1.0.0) | ✅ user (1.0.0) |
 | 7 | Unelevated app (normal launch) | Broker holds `Global\`: both cameras live | | ✅ admin account, unelevated token; a true standard account not tried |
 | 7b | Real phone streams to the installed app | Both cameras show the phone | | ✅ Nothing Phone (3a), Wi-Fi marked Public (needed the all-profiles firewall rule) |
-| 8 | Installer: install, upgrade over a running consumer, uninstall | Files, both COM registrations, broker service, firewall rule, shortcuts, Add/Remove entry; uninstall removes all (locked DLLs on reboot) | | ✅ silent `/S` install, reinstall, uninstall |
+| 8 | Installer: install, upgrade over a running consumer, uninstall | Files, both COM registrations, broker service, firewall rule, shortcuts, Add/Remove entry; uninstall removes all (locked DLLs on reboot) | | ✅ silent `/S` install, reinstall, uninstall; 1.0.0: uninstall with Brave/Discord holding the DLL removes the install folder at once (user) |

@@ -628,13 +628,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.1.1"
-  windows_receiver:
-    dependency: "direct main"
-    description:
-      path: "../plugins/windows_receiver"
-      relative: true
-    source: path
-    version: "0.0.1"
   xdg_directories:
     dependency: transitive
     description:

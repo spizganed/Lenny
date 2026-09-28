@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
 description = "Lenny's Windows virtual cameras in one COM DLL: DirectShow filter (Win10+11, x64 and x86) and the Media Foundation virtual camera source (Win11, x64). Reads lenny_framebuf only."
-license = "UNLICENSED"
+license = "GPL-3.0-only"
 publish = false
 
 [lib]

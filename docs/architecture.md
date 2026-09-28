@@ -1,10 +1,11 @@
 # Lenny — Architecture
 
-Status: living document. Phase A (core port to Rust) is done; the Phase B desktop receiver exists for Linux
-(§7a) and replaces the Flutter/C++ Windows receiver described in §7 once its Windows virtual-camera backends exist.
+Status: living document. Phase A (core port to Rust) is done. The desktop receiver is the Rust app (§7a) on Windows
+and Linux, with the Windows virtual cameras in `vcam/com` (§7.4). The phone app is still Flutter + a Kotlin plugin.
+The Flutter desktop + `plugins/windows_receiver` were removed (ADR-0011).
 
 Lenny turns a phone into a webcam. **Sender** = phone app (Android now, iOS later).
-**Receiver** = desktop app (Windows now, Linux later; macOS is out of scope) that decodes the stream
+**Receiver** = desktop app (Windows and Linux; macOS is out of scope) that decodes the stream
 and feeds an OS-level **virtual camera** seen by Zoom, Teams, Discord, browsers, OBS.
 
 ## 1. Goals and non-goals
@@ -22,66 +23,50 @@ encryption (deferred, see §9), macOS receiver (dropped, see §11), mascot art.
 ## 2. Component map
 
 ```
- SENDER (Android)                                   RECEIVER (Windows)
- ┌──────────────────────────────┐                   ┌──────────────────────────────────────┐
- │ Flutter UI (/app)            │                   │ Flutter UI (/app)                    │
- │  Riverpod providers          │                   │  Riverpod providers                  │
- │  Services (Dart) ── FFI ─┐   │                   │  Services (Dart) ── FFI ──┐          │
- │        │ method channel  │   │                   │        │ method channel   │          │
- ├────────┼─────────────────┼───┤                   ├────────┼──────────────────┼──────────┤
- │ android_camera plugin    │   │                   │ windows_receiver plugin   │          │
- │ (Kotlin)                 │   │                   │ (C++)                     │          │
- │  Camera2                 │   │                   │  MF H.264 decoder ──┐     │          │
- │  MediaCodec H.264 ─┐     │   │                   │                     ▼     │          │
- │  NsdManager        │     │   │                   │  Shared-mem writer (Global\)         │
- │  Foreground service│     │   │                   ├─────────────────────┬────────────────┤
- ├────────────────────▼─────▼───┤   TCP (Wi-Fi /    │ lenny_core (Rust)   │                │
- │ lenny_core (Rust, C ABI)     │◄─ ADB fwd / RNDIS)►│ protocol, session,  │                │
- │ protocol, session, transport │                   │ transport, jitter   │                │
- └──────────────────────────────┘                   └─────────────────────┼────────────────┘
-                                                           Global\ shared memory ring
-                                                    ┌─────────────────────┴────────────────┐
-                                                    │ windows_vcam                         │
-                                                    │  a) DirectShow source filter (x86+x64│
-                                                    │     COM DLL, loaded in Zoom/Chrome…) │
-                                                    │  b) MF virtual camera (Win11, runs in│
-                                                    │     Frame Server as Local Service)   │
-                                                    └──────────────────────────────────────┘
+ SENDER (Android)                                    RECEIVER (Windows / Linux)
+ ┌──────────────────────────────┐                    ┌──────────────────────────────────────┐
+ │ Flutter UI (/app), Riverpod  │                    │ lenny_desktop (Rust, egui)           │
+ │  Services (Dart) ── FFI ─┐   │                    │  openh264 decode, preview, controls  │
+ │        │ method channel  │   │                    │  lenny_core as a Rust crate (no FFI) │
+ ├────────┼─────────────────┼───┤                    │  lenny_vcam: IVirtualCamera          │
+ │ android_camera (Kotlin)  │   │                    └───────────────┬──────────────────────┘
+ │  Camera2, MediaCodec H.264   │   TCP (Wi-Fi /       Windows: §7.3 shm ring (Global\, broker)
+ │  foreground service      │   │◄─ adb reverse / ─►   Linux: v4l2loopback device
+ ├──────────────────────────▼───┤    USB tethering)  ┌───────────────┴──────────────────────┐
+ │ lenny_core (Rust, C ABI)     │                    │ vcam/com: lenny_vcam_com.dll         │
+ │ protocol, session, transport │                    │  a) DirectShow source filter (x86+x64│
+ └──────────────────────────────┘                    │     loaded in Zoom/Chrome…)          │
+                                                     │  b) MF virtual camera (Win11, Frame  │
+                                                     │     Server as Local Service)         │
+                                                     └──────────────────────────────────────┘
 ```
 
-Video path: camera → MediaCodec → core (framing) → TCP → core (reassembly, jitter)
-→ MF decoder → shared memory → vcam. **Dart never touches a frame.** Dart handles
-UI, settings, and control commands only. Preview on the phone is a native
-`Texture` (Flutter texture registry). Preview on desktop is also a native texture,
-fed from the same decoded NV12 frames.
+Video path: camera → MediaCodec → core (framing) → TCP → core (reassembly) → decoder → virtual camera + preview.
+**Dart never touches a frame.** On the phone Dart handles UI, settings and control commands only.
 
 ## 3. Repo layout
 
 ```
-/app        Flutter app (one codebase: Android + Windows now; iOS/Linux later)
+/app        Flutter phone app
   lib/
     brand.dart            ← the ONLY place "Lenny" / "Lenny Desktop" strings live
-    theme/                ← colors, StickerDecoration, sticker theme extension
-    ui/components/        ← StickerButton, StickerCard, StatusChip, ConnectionControl, QrCard
-    ui/screens/sender/    ← phone screens
-    ui/screens/receiver/  ← desktop screens
+    theme/                ← lenny_tokens.dart (docs/design.md tokens)
+    ui/components/        ← sticker.dart (Sticker, buttons, cards…), camera_controls.dart
+    ui/screens/           ← sender_screen.dart
     services/             ← the ONLY code that calls FFI / method channels
     state/                ← Riverpod providers
     core_bindings/        ← ffigen output (generated, don't edit)
 /core       Rust crate lenny_core (cdylib + staticlib + rlib), C ABI in include/lenny/lenny.h, tests in core/tests
 /framebuf   Rust crate lenny_framebuf: §7.3 shared-memory ring format (writer + bounds-checked reader), no deps
-/vcam       Rust crate lenny_vcam: IVirtualCamera trait + backends (v4l2loopback, Windows shm writer, null)
+/vcam       Rust crate lenny_vcam: IVirtualCamera trait + backends (v4l2loopback, Windows shm writer, null), broker
   com/                  lenny_vcam_com.dll: DirectShow filter + MF media source (§7.4), Rust, reads framebuf only
-/desktop    Rust desktop receiver (egui): Linux now, Windows next (§7a)
+/desktop    Rust desktop receiver (egui), Windows + Linux (§7a)
 /plugins
-  android_camera/         Kotlin: Camera2, MediaCodec encoder, NsdManager, foreground service
-  windows_receiver/       C++: MF decoder, shm writer, DNS-SD browse, adb helper, preview texture
-  windows_vcam/           C++: DirectShow filter DLL (x86+x64), MF vcam media source DLL
-  qr_scan/                one-off QR scan (Android), see §8
+  android_camera/         Kotlin: Camera2, MediaCodec encoder, QR scan, foreground service
 /protocol   protocol spec source-of-truth pointer + binary test vectors
 /ios /linux               README only (future work)
 /installer  NSIS script (see ADR-0008)
-/docs       architecture.md, protocol.md, testing.md, compat-matrix.md, adr/
+/docs       architecture.md, protocol.md, design.md, testing.md, adr/
 ```
 
 ## 4. Shared core (`/core`)
@@ -227,17 +212,11 @@ default **Auto** control state (protocol.md §6.9: every connect and reconnect s
 
 ## 7. Windows receiver
 
-### 7.1 UI and native language (see ADR-0003)
-The UI is Flutter. Native parts are C++ only, with no C#/.NET, because:
-- Media Foundation, DirectShow and `MFCreateVirtualCamera` are native COM APIs. C# would need interop for all of them.
-- The DirectShow filter is loaded **into other processes** (Zoom, Chrome). Loading a CLR there is out of the question.
-- The core is C++, so there's one toolchain, one debugger, and no marshalling layer.
-
-### 7.2 Decode
-MF H.264 decoder MFT (hardware via `MF_SA_D3D11_AWARE` + DXGI device manager, software
-fallback automatically). Output NV12. `CODECAPI_AVLowLatencyMode = TRUE`. If the decoder
-errors, flush and wait for the next keyframe (request one via `CONTROL keyframe_request`),
-and the vcam shows the last good frame for ≤ 500 ms, then the placeholder.
+### 7.1–7.2 Language and decode
+The Windows receiver was first planned as Flutter + C++ (ADR-0003); it is now the Rust desktop app (ADR-0006,
+ADR-0007, §7a) and the Rust COM DLL (§7.4). No C#/.NET anywhere: the DirectShow filter is loaded into other
+processes, where a CLR is out of the question. Decode is openh264 today; the Media Foundation H.264 decoder
+(hardware, and licensed with the OS: see the H.264 patent note in CLAUDE.md) is the preferred upgrade on Windows.
 
 ### 7.3 Shared memory (`framebuf` format, Windows mapping)
 - Names: `Global\LennyFrames_v1` (mapping), `Global\LennyFrameReady_v1` (auto-reset event).
@@ -269,7 +248,7 @@ lenny_core). The writer is `lenny_vcam::WindowsCamera` in the desktop app. The b
 (`vcam/src/bin`, ADR-0009; auto start, not on demand): the app opens its `Global\` objects, else creates `Global\` itself
 (elevated), else falls back to `Local\`, which the DirectShow filter sees and Frame Server doesn't. Frame Server also
 needs to read the DLL: install it outside user profiles (Program Files), or `Start` fails with access denied.
-The C++/plugin wording below is the original plan; the design (shm, crash containment, naming) carries over as is.
+The wording below is from the original C++ plan (file names, SEH); the design (shm, crash containment, naming) carries over as is, with `catch_unwind` in place of SEH.
 
 Both read the same shared memory, and both do their own scale/letterbox and color convert
 to the format the consumer picked, so the receiver app writes one frame at one size.
@@ -312,23 +291,18 @@ to the format the consumer picked, so the receiver app writes one frame at one s
   single-use token (90 s, renewed every 80 s and after each pairing). The phone probes the listed
   addresses with the same UDP probe, connects to the first that answers, and the token skips the
   approval prompt (protocol.md §6.4).
-- Trusted phones: a phone that streamed once is saved by device id (shared_preferences) and passed to
-  `lenny_receiver_trust_device` at start, so it reconnects without a prompt. The phone saves the last
+- Trusted phones: a phone that streamed once is saved by device id (`known_phones.txt` in the config dir) and
+  passed to `lenny_receiver_trust_device` at start, so it reconnects without a prompt. The phone saves the last
   PC that streamed and prefills the form.
-- ADB: bundled `adb.exe` (platform-tools, Apache 2.0) under the install dir. The receiver polls
-  `adb devices` every 2 s, and for each authorized device runs `adb reverse tcp:47474 tcp:47474`
-  and tells the phone app to connect to localhost via `adb shell am broadcast`, or the phone
-  auto-tries localhost when USB is attached. If the device shows `unauthorized`, the UI shows the setup
-  guide step "Allow USB debugging on your phone".
+- ADB: the user's own adb, nothing bundled (licence, see CLAUDE.md). Details in §7a (USB ADB).
 - Tethering (RNDIS): no special code. The PC gets a `192.168.42.x`-style address on a new adapter.
   The receiver listens on all interfaces, and the phone connects to the tethering gateway's peer.
-  The receiver lists the RNDIS adapter IP in the USB dropdown ("USB tethering: 192.168.42.129").
+  The desktop lists the tethering adapter's IP under USB tether.
 
-## 7a. Desktop receiver in Rust (Phase B; Linux now, Windows next — ADR-0007)
+## 7a. Desktop receiver in Rust (Phase B, Windows + Linux — ADR-0007)
 
 `/desktop` (crate `lenny_desktop`): eframe/egui over winit, linking `lenny_core` and `lenny_vcam` as Rust crates
-(no FFI). Replaces the Flutter desktop + `plugins/windows_receiver` on each OS once that OS has its virtual camera
-backends.
+(no FFI). Replaced the Flutter desktop + `plugins/windows_receiver` (ADR-0011).
 
 - **Window**: borderless (`with_decorations(false)`); the title bar is drawn per docs/design.md and wired to real
   viewport commands: minimize, maximize/restore, close, `StartDrag` on the bar, double-click to maximize,
@@ -400,47 +374,19 @@ backends.
 - The receiver caps message sizes (protocol.md §3) and drops the connection on malformed framing.
   Unknown message types are skipped, not fatal.
 - Debug logs, crash dumps and captured streams stay on the local machine and are gitignored. They are never committed.
-- The receiver caps message sizes (protocol.md §3) and drops the connection on malformed framing.
-  Unknown message types are skipped, not fatal.
 
-## 10. Flutter app structure
+## 10. Flutter phone app
 
 - **State: Riverpod** (ADR-0002). Services are plain Dart classes exposed via providers, and widgets
-  read providers only. Widgets never import `dart:ffi` or `MethodChannel`, which is enforced by a
-  custom lint / `import_lint` rule on `lib/ui/**`.
-- Services: `CoreService` (FFI session control, stats stream), `CameraService` (sender: method channel
-  to android_camera), `ReceiverService` (desktop: windows_receiver), `DiscoveryService`, `UsbService`,
-  `PairingService` (QR token generation/parsing).
-- Role is chosen by platform: Android/iOS → sender screens, Windows/Linux → receiver screens.
+  read providers only; widgets never import `dart:ffi` or `MethodChannel` (convention, not lint-enforced).
+- Services: `core_session.dart` (FFI session control, stats), `platform_services.dart` (method channel to
+  android_camera), `discovery.dart` (UDP probe), `pc_link.dart` (QR / `lenny://` parsing).
 - Brand: `lib/brand.dart` holds `appName = 'Lenny'`, `desktopAppName = 'Lenny Desktop'`,
   `storeName = 'Lenny – Phone Webcam'` (store listings only; in-app it's just "Lenny"),
   `appId = 'com.spizganed.lenny'` (Android applicationId, iOS bundle id, Windows AppUserModelID prefix).
-  The app id can never change after the first store release. Native projects
-  (AndroidManifest label, Windows resource file, installer product name) get it from a generated
-  `brand.json` at build time so the name really lives in one place.
-- **Mascot slot:** `MascotSlot` widget on the home/connection screen, sized box with a
-  `// TODO(mascot): drop sprite assets here` marker and no placeholder art. The same spot exists in the
-  vcam placeholder frame, which is plain text for now.
-
-### 10.1 Sticker style
-- `lib/theme/lenny_colors.dart`: bg `#14162b`, outline `#b9b5cc`, shadow `#0c0c18`, primary yellow,
-  danger red/pink, info, success. These are the only color definitions in the app.
-- `StickerStyle` `ThemeExtension` (outline width 3, radius 18, pill radius, shadow offset 5,5) +
-  `StickerDecoration` builder producing `BoxDecoration(border: 3px outline, boxShadow: [BoxShadow(color: shadow, offset: Offset(5,5), blurRadius: 0, spreadRadius: 0)])`.
-- `Pressable` wrapper: pointer down animates shadow offset → 0 and translates the child by (5,5)
-  with a spring (flutter_animate / `SpringSimulation`, ~250 ms). `MediaQuery.disableAnimations` → fade only.
-  Every StickerButton/Card/Chip uses it, so nothing is built ad hoc per screen.
-- Background: plain `page` (the dot grid was dropped 2026-09-28).
-- `QrCard`: sticker card whose inner area is a flat white box with ≥ 4-module quiet zone. The QR
-  image itself gets no outline or shadow.
-
-### 10.2 ConnectionControl
-One widget, both apps. Collapsed pill: left zone = status dot + label (tap = disconnect
-when connected), right zone = chevron (expand/collapse only). Expanded (only when disconnected) = the
-same container grows via `AnimatedSize` + `AnimatedOpacity` (ease curve, not spring) into:
-Wi-Fi section (IP, port, Connect, discovered list, QR: desktop shows QrCard, phone shows "Scan to connect")
-and USB section (device dropdown: ADB / tethering, Connect). Chevron `AnimatedRotation` 0.5 turns.
-Connect success → auto-collapse.
+  The app id can never change after the first store release.
+- Look: docs/design.md, tokens in `lib/theme/lenny_tokens.dart`, widgets in `lib/ui/components/sticker.dart`.
+- Mascot: `MascotSlot` exists but isn't placed; the vcam placeholder frame is plain text for now.
 
 ## 11. Future platforms (designed, not built)
 
@@ -449,7 +395,7 @@ Connect success → auto-collapse.
 | iOS sender | Swift plugin: AVFoundation capture, VideoToolbox H.264, NWBrowser discovery, background mode limits | iOS can't keep the camera running in the background, so streaming requires the app in the foreground. Tell users. Needs `NSLocalNetworkUsageDescription` + `NSBonjourServices` (`_lenny._tcp`) in Info.plist, or iOS 14+ silently blocks LAN connects. No ADB on iOS: USB path is Personal Hotspot over USB (same idea as tethering). |
 | Linux receiver | Built (§7a): Rust desktop app, openh264 decode, v4l2loopback via `lenny_vcam`, UDP discovery | v4l2loopback is a DKMS module; Secure Boot requires a MOK-signed module. PipeWire camera backend as a later option. |
 
-The core, protocol and Flutter UI are unchanged in both.
+The core and protocol are unchanged in both.
 
 macOS receiver: **dropped** (decision 2026-09-25). The protocol keeps `platform=4` reserved so the numbering never shifts.
 
@@ -457,8 +403,8 @@ macOS receiver: **dropped** (decision 2026-09-25). The protocol keeps `platform=
 - Core: a Cargo workspace at the repo root (`core`, `vcam`, `desktop`). `cargo test` runs the wire, vector and
   full-session tests; `core/tests/c_abi/` is the old C++ session test, built against lenny.h and linked to the Rust
   static library under ASan/UBSan. Android: cargo-ndk from the android_camera Gradle build (arm64, armv7, x86_64,
-  x86). `core/CMakeLists.txt` wraps cargo for CMake consumers (Windows, not yet built there).
-- Flutter: `flutter build apk` / `flutter build windows`. ffigen runs in CI and a diff check keeps bindings in sync.
+  x86). `core/CMakeLists.txt` wraps cargo for CMake consumers (never built on Windows).
+- Flutter: `flutter build apk`. ffigen runs in CI and a diff check keeps bindings in sync.
 - CI: GitHub Actions `core.yml` — fmt, clippy, tests, ABI check and the C ABI test on Linux; cargo-ndk build for Android.
   `windows` job: clippy + workspace tests on MSVC x64, the virtual camera tests as x86 too, regsvr32 round trip. Fuzzing of `wire` decode (cargo-fuzz) is still to do.
 
@@ -472,4 +418,4 @@ macOS receiver: **dropped** (decision 2026-09-25). The protocol keeps `platform=
 | R4 | OEM camera quirks (AE fps range ignored, KEY_LOW_LATENCY ignored) | Query `CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES`, log effective values in stats |
 | R5 | Two Lenny devices on Win11 confuse users | Naming, and possibly hide DShow on Win11 by default (decide after M5) |
 | R6 | Latency target on congested Wi-Fi | Jitter buffer target adaptive 0–60 ms, drop-to-keyframe policy, bitrate step-down on RTT increase |
-| R7 | Bundled adb conflicts with a user's adb server version | Use user's adb if on PATH and running. Else bundled on non-default port (`ANDROID_ADB_SERVER_PORT`) |
+| R7 | No adb on the user's PC | USB ADB uses the user's adb (PATH or Android SDK) and says when it's missing; Wi-Fi and USB tether need none |

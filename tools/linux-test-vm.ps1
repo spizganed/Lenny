@@ -1,58 +1,68 @@
 <#
 .SYNOPSIS
-  One-shot Linux test VM for Lenny on a Windows PC: VirtualBox + Ubuntu 24.04 (Xfce) with v4l2loopback, OBS,
-  Discord, Chromium and Lenny Desktop built from a branch. Bridged networking, so the phone reaches the VM directly.
+  One-shot Linux test VM for Lenny on a Windows PC: Hyper-V + Ubuntu 24.04 (Xfce) with v4l2loopback, OBS,
+  Discord, Chromium and Lenny Desktop built from a branch. External switch, so the phone reaches the VM directly.
 
 .DESCRIPTION
-  No OS installer: it boots Ubuntu's ready-made cloud disk and cloud-init does the setup on first boot
-  (20-40 min, then it reboots into the desktop, logged in as lenny/lenny).
-  Known bad: a PC with Hyper-V on (WSL2, VBS/Memory Integrity). VirtualBox then runs on top of Hyper-V and the guest
-  stalls (RCU stalls, soft lockups). Bridging over Wi-Fi can also be very slow; see docs/testing.md.
+  No OS installer: it boots Ubuntu's ready-made cloud disk (converted to VHDX with qemu-img) and cloud-init does the
+  setup on first boot (20-40 min, then it reboots into the desktop, logged in as lenny/lenny). The script returns as
+  soon as the VM is started; the rest happens inside the VM, a hidden helper copies its serial console to serial.log.
+  Hyper-V, not VirtualBox: with Hyper-V on (WSL2, VBS/Memory Integrity) a VirtualBox guest stalls (docs/testing.md).
+  Secure Boot is off in the VM, because the v4l2loopback DKMS module isn't signed.
+
   Run from an elevated PowerShell:   powershell -ExecutionPolicy Bypass -File tools\linux-test-vm.ps1
-  Start over:                        & "$env:ProgramFiles\Oracle\VirtualBox\VBoxManage.exe" unregistervm lenny-linux --delete
+  First run on a PC without Hyper-V enables it and asks for a reboot; run it again afterwards.
+  Creating the external switch drops the PC's network for a few seconds.
+  Start over:                        Remove-VM lenny-linux -Force; Remove-Item -Recurse "$env:PUBLIC\Documents\Hyper-V\lenny-linux"
 
   Inside the VM (Xfce menu or a terminal):
     lenny-desktop      the app. Stream card should say "Virtual camera: active" (/dev/video10, "Lenny")
     lenny-fake-phone   synthetic phone streaming to this VM, if no phone is at hand
     lenny-update       git pull + rebuild
   Then pick the "Lenny" camera in OBS (Video Capture Device (V4L2)), Discord (Settings > Voice & Video) or Chromium.
-  Phone: same Wi-Fi as the PC, scan the QR code in Lenny Desktop.
+  Phone: same network as the PC, scan the QR code in Lenny Desktop.
 #>
 param(
     [string]$VmName = "lenny-linux",
     [int]$Cpus = 4,
-    [int]$MemoryMB = 8192,
+    [long]$MemoryMB = 8192,
     [int]$DiskGB = 40,
-    [string]$Branch = "rust-rewrite-cloud",
+    [string]$Branch = "main",
     [string]$RepoUrl = "https://github.com/spizganed/Lenny.git",
-    [string]$BridgeAdapter = "",   # default: the adapter that has the default route
-    [string]$Dir = "$env:USERPROFILE\VirtualBox VMs\$VmName"
+    [string]$SwitchName = "Lenny External",
+    [string]$NetAdapter = "",   # default: the adapter that has the default route
+    [string]$Dir = "$env:PUBLIC\Documents\Hyper-V\$VmName"   # outside the user profile, Hyper-V's worker must read it
 )
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-# ---- 1. VirtualBox ----
-$vbm = "$env:ProgramFiles\Oracle\VirtualBox\VBoxManage.exe"
-if (-not (Test-Path $vbm)) {
-    Write-Host "Installing VirtualBox (winget)..."
-    winget install -e --id Microsoft.VCRedist.2015+.x64 --silent --accept-package-agreements --accept-source-agreements
-    winget install -e --id Oracle.VirtualBox --silent --accept-package-agreements --accept-source-agreements
-    if (-not (Test-Path $vbm)) { throw "VirtualBox didn't install; install it from virtualbox.org and run this again." }
+# ---- 1. Hyper-V ----
+if ((Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All).State -ne "Enabled") {
+    Write-Host "Enabling Hyper-V..."
+    $r = Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V-All -All -NoRestart
+    if ($r.RestartNeeded) { Write-Host "Hyper-V enabled. Reboot, then run this script again."; exit 0 }
 }
-function VBox { & $vbm @args; if ($LASTEXITCODE) { throw "VBoxManage $($args -join ' ') failed" } }
-if ((& $vbm list vms) -match "`"$VmName`"") { throw "VM '$VmName' exists. Delete it first: `"$vbm`" unregistervm $VmName --delete" }
+Import-Module Hyper-V
+if (Get-VM -Name $VmName -ErrorAction SilentlyContinue) { throw "VM '$VmName' exists. Delete it first (see Start over in the header)." }
 
-# ---- 2. Ubuntu cloud disk -> resized VDI ----
+# ---- 2. Ubuntu cloud disk -> resized VHDX ----
+$qemuImg = "$env:ProgramFiles\qemu\qemu-img.exe"
+if (-not (Test-Path $qemuImg)) {
+    Write-Host "Installing QEMU for qemu-img (winget)..."
+    winget install -e --id SoftwareFreedomConservancy.QEMU --silent --accept-package-agreements --accept-source-agreements
+    if (-not (Test-Path $qemuImg)) { throw "qemu-img not found at $qemuImg" }
+}
 New-Item -ItemType Directory -Force $Dir | Out-Null
-$vmdk = Join-Path $Dir "noble-cloudimg.vmdk"
-$vdi = Join-Path $Dir "$VmName.vdi"
-if (-not (Test-Path $vmdk)) {
+$img = Join-Path $Dir "noble-cloudimg.img"
+$vhdx = Join-Path $Dir "$VmName.vhdx"
+if (-not (Test-Path $img)) {
     Write-Host "Downloading Ubuntu 24.04 cloud image (~600 MB)..."
-    curl.exe -fL -o $vmdk "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.vmdk"
+    curl.exe -fL -o $img "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
     if ($LASTEXITCODE) { throw "download failed" }
 }
-VBox clonemedium disk $vmdk $vdi --format VDI
-VBox modifymedium disk $vdi --resize ($DiskGB * 1024)
+& $qemuImg convert -f qcow2 -O vhdx -o subformat=dynamic $img $vhdx
+if ($LASTEXITCODE) { throw "qemu-img convert failed" }
+Resize-VHD -Path $vhdx -SizeBytes ([long]$DiskGB * 1GB)
 
 # ---- 3. cloud-init seed ISO (NoCloud, volume label "cidata") ----
 $userData = @"
@@ -75,7 +85,6 @@ packages:
   - lightdm
   - lightdm-gtk-greeter
   - dbus-x11
-  - virtualbox-guest-x11
   - obs-studio
   - ffmpeg
   - v4l-utils
@@ -107,7 +116,8 @@ write_files:
   - path: /usr/share/applications/lenny-fake-phone.desktop
     content: "[Desktop Entry]\nType=Application\nName=Lenny fake phone\nExec=lenny-fake-phone\nTerminal=true\nIcon=phone\nCategories=AudioVideo;\n"
 runcmd:
-  - apt-get install -y linux-headers-`$(uname -r) v4l2loopback-dkms
+  # the cloud image's kernel leaves videodev (needed by v4l2loopback) in linux-modules-extra
+  - apt-get install -y linux-headers-`$(uname -r) linux-modules-extra-`$(uname -r) v4l2loopback-dkms
   - curl -fL -o /tmp/discord.deb 'https://discord.com/api/download?platform=linux&format=deb' && apt-get install -y /tmp/discord.deb
   - snap install chromium
   - su - lenny -c 'curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal'
@@ -135,26 +145,37 @@ $fsi = New-Object -ComObject IMAPI2FS.MsftFileSystemImage
 $fsi.FileSystemsToCreate = 3   # ISO9660 + Joliet (keeps the "user-data" name)
 $fsi.VolumeName = "cidata"
 $fsi.Root.AddTree($seedDir, $false)
-$img = $fsi.CreateResultImage()
+$isoImg = $fsi.CreateResultImage()
 $iso = Join-Path $Dir "seed.iso"
-[IsoWriter]::Save($img.ImageStream, $iso, $img.BlockSize, $img.TotalBlocks)
+[IsoWriter]::Save($isoImg.ImageStream, $iso, $isoImg.BlockSize, $isoImg.TotalBlocks)
 
-# ---- 4. VM: bridged to the PC's LAN adapter, so the phone reaches it at its own IP ----
-if (-not $BridgeAdapter) {
-    $route = Get-NetRoute -DestinationPrefix 0.0.0.0/0 | Sort-Object RouteMetric, InterfaceMetric | Select-Object -First 1
-    $BridgeAdapter = (Get-NetAdapter -InterfaceIndex $route.ifIndex).InterfaceDescription
+# ---- 4. External switch on the PC's LAN adapter, so the phone reaches the VM at its own IP ----
+if (-not (Get-VMSwitch -Name $SwitchName -ErrorAction SilentlyContinue)) {
+    if (-not $NetAdapter) {
+        $route = Get-NetRoute -DestinationPrefix 0.0.0.0/0 | Sort-Object RouteMetric, InterfaceMetric | Select-Object -First 1
+        $NetAdapter = (Get-NetAdapter -InterfaceIndex $route.ifIndex).Name
+    }
+    Write-Host "Creating external switch on '$NetAdapter' (network drops for a few seconds)..."
+    New-VMSwitch -Name $SwitchName -NetAdapterName $NetAdapter -AllowManagementOS $true | Out-Null
 }
-Write-Host "Bridging to: $BridgeAdapter"
-VBox createvm --name $VmName --ostype Ubuntu_64 --register --basefolder (Split-Path $Dir)
-VBox modifyvm $VmName --memory $MemoryMB --cpus $Cpus --vram 128 --graphicscontroller vmsvga `
-    --nic1 bridged --bridgeadapter1 $BridgeAdapter --clipboard-mode bidirectional --rtcuseutc on `
-    --uart1 0x3F8 4 --uartmode1 file (Join-Path $Dir "serial.log")
-VBox storagectl $VmName --name SATA --add sata --controller IntelAhci --portcount 2
-VBox storageattach $VmName --storagectl SATA --port 0 --device 0 --type hdd --medium $vdi
-VBox storageattach $VmName --storagectl SATA --port 1 --device 0 --type dvddrive --medium $iso
-VBox startvm $VmName --type gui
+
+# ---- 5. VM (Gen 2, Secure Boot off) ----
+New-VM -Name $VmName -Generation 2 -MemoryStartupBytes ($MemoryMB * 1MB) -VHDPath $vhdx -SwitchName $SwitchName -Path (Split-Path $Dir) | Out-Null
+Set-VM -Name $VmName -ProcessorCount $Cpus -StaticMemory -CheckpointType Disabled -AutomaticCheckpointsEnabled $false
+Set-VMFirmware -VMName $VmName -EnableSecureBoot Off
+Add-VMDvdDrive -VMName $VmName -Path $iso
+$pipe = "\\.\pipe\$VmName-com1"
+Set-VMComPort -VMName $VmName -Number 1 -Path $pipe
+Start-VM -Name $VmName
+
+# serial console -> serial.log, in a hidden helper that ends when the VM stops
+$log = Join-Path $Dir "serial.log"
+$reader = "`$p = New-Object IO.Pipes.NamedPipeClientStream('.', '$VmName-com1', 'In'); `$p.Connect(60000); " +
+          "`$f = [IO.File]::Open('$log', 'Append', 'Write', 'ReadWrite'); `$p.CopyTo(`$f); `$f.Close()"
+Start-Process powershell -WindowStyle Hidden -ArgumentList "-NoProfile", "-Command", $reader
 
 Write-Host ""
 Write-Host "VM started. First boot sets everything up (20-40 min), then reboots into the Xfce desktop as lenny/lenny."
-Write-Host "Progress: $(Join-Path $Dir 'serial.log')  (look for 'Lenny test VM ready')"
+Write-Host "Progress: $log  (look for 'Lenny test VM ready')"
+Write-Host "Screen: vmconnect localhost $VmName   (or Hyper-V Manager)"
 Write-Host "Then: menu > Lenny Desktop. The phone must be on the same network as this PC."

@@ -4,7 +4,7 @@ version = "1.0.0"
 edition = "2021"
 rust-version = "1.85"
 description = "Lenny Desktop: receives the phone's stream, shows it, and feeds the OS virtual camera."
-license = "UNLICENSED"
+license = "GPL-3.0-only"
 publish = false
 
 [[bin]]

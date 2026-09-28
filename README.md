@@ -96,7 +96,11 @@ cargo run -p lenny_desktop --example fake_phone -- 127.0.0.1 47474   # no phone 
 | `vcam/com/` | The Windows camera DLL (DirectShow filter + Media Foundation source), Rust, x64 and x86. |
 | `framebuf/` | The shared-memory frame ring between the app and the camera DLL. |
 | `installer/` | NSIS installer and uninstaller (ADR-0008). |
-| `app/` | Flutter phone app (Android). Its old Windows desktop UI is being retired. |
+| `app/` | Flutter phone app (Android). |
 | `plugins/android_camera` | Camera2 capture + MediaCodec H.264 encoder (Kotlin + JNI). |
 
 More: [architecture](docs/architecture.md), [wire protocol](docs/protocol.md), [design system](docs/design.md), [testing](docs/testing.md).
+
+## License
+
+[GPL-3.0](LICENSE). Use it, change it, share it; anything built on it stays open source too.

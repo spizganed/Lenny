@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.82"
 description = "IVirtualCamera: the OS virtual camera behind one trait. v4l2loopback on Linux, null (file) backend anywhere."
-license = "UNLICENSED"
+license = "GPL-3.0-only"
 publish = false
 
 [dependencies]

@@ -13,8 +13,6 @@ dependencies:
   ffi: ^2.2.0
   android_camera:
     path: ../plugins/android_camera
-  windows_receiver:
-    path: ../plugins/windows_receiver
   shared_preferences: ^2.5.5
   qr_flutter: ^4.1.0
   google_fonts: ^8.2.1
